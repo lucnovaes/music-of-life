@@ -11,8 +11,14 @@
 /[Oo]bj/
 /[Bb]uild/
 /[Bb]uilds/
+/[Mm]emoryCaptures/
+/[Mm][Mm][Oo][Cc][Hh][Aa]/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
+/assets/AssetStoreTools*
+Packages/*/ProjectData~/
+**/ProjectData~/Library/
+**/ProjectData~/
 *.log
 
 # By default unity supports Blender asset imports, *.blend1 blender files do not need to be commited to version control.
