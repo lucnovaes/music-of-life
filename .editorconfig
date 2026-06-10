@@ -1,0 +1,4 @@
+[*.cs]
+dotnet_root_namespace = mil
+
+build_property.TransformSheet_NamespaceProvider_Scripts = false
