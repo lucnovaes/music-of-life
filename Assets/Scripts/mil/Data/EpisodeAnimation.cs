@@ -11,11 +11,14 @@ namespace mil.Data
 
         [Header("Audio Tracking (FMOD Event Paths)")]
         [SerializeField] private string mainAudioEventPath;
-        [SerializeField] private string backgroundMoodAudioPath;
+        [SerializeField] private string textureAudioEventPath;
+        [SerializeField] private string soundtrackAudioEventPath;
+
 
         public AnimationClip AnimationClip => animationClip;
         public float DurationSeconds => durationSeconds;
         public string MainAudioEventPath => mainAudioEventPath;
-        public string BackgroundMoodAudioPath => backgroundMoodAudioPath;
+        public string TextureAudioEventPath => textureAudioEventPath;
+        public string SoundtrackAudioEventPath => soundtrackAudioEventPath;
     }
 }

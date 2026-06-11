@@ -100,7 +100,7 @@ namespace mil.UI
             }
 
 
-            Debug.Log($"[EpisodesUI] Aplicando estética visual do Shader: {currentEpisode.VisualShaderType}");
+            Debug.Log($"[EpisodesUI] Aplicando estética visual do Shader: {currentEpisode.ShaderType}");
         }
 
         public void SetVisible(bool isVisible)
