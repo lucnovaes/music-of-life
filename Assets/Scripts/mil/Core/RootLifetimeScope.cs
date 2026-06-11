@@ -1,6 +1,7 @@
 using VContainer;
 using VContainer.Unity;
 using mil.Platform;
+using mil.Model;
 
 namespace mil.Core
 {
@@ -8,21 +9,23 @@ namespace mil.Core
     {
         protected override void Awake()
         {
-            // Garante que o escopo global não seja destruído ao trocar de cena
             DontDestroyOnLoad(gameObject);
             base.Awake();
         }
 
         protected override void Configure(IContainerBuilder builder)
         {
-            builder.Register<SceneLoader>(Lifetime.Singleton);
-
 #if UNITY_EDITOR
             builder.Register<IPlatformService, EditorPlatformService>(Lifetime.Singleton);
 #else
-            builder.Register<IPlatformService, SteamPlatformService>(Lifetime.Singleton)
-                   .AsInterfaces();
+            builder.Register<IPlatformService, SteamPlatformService>(Lifetime.Singleton);
 #endif
+
+            builder.Register<SceneLoader>(Lifetime.Singleton);
+            builder.Register<GameSettingsModel>(Lifetime.Singleton);
+            builder.Register<InputHandler>(Lifetime.Singleton).AsImplementedInterfaces().AsSelf();
+
+            builder.RegisterEntryPoint<Bootstrapper>();
 
         }
     }
