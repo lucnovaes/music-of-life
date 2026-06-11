@@ -8,16 +8,16 @@ namespace mil.Data
         [SerializeField] private string episodeTitle;
         [SerializeField] private Sprite thumbnailImage;
         [SerializeField] private ShaderType visualShaderType;
-        [SerializeField] private AnimationClip introAnimation;
-        [SerializeField] private AnimationClip finalAnimation;
+        [SerializeField] private EpisodeAnimation mesterIntroAnimationBlock;
+        [SerializeField] private EpisodeAnimation masterFinalAnimationBlock;
         [SerializeField] private Chapter[] chapters;
         [SerializeField] private string[] creditNames; 
 
         public string EpisodeTitle => episodeTitle;
         public Sprite ThumbnailImage => thumbnailImage;
         public ShaderType VisualShaderType => visualShaderType;
-        public AnimationClip IntroAnimation => introAnimation;
-        public AnimationClip FinalAnimation => finalAnimation;
+        public EpisodeAnimation MesterIntroAnimationBlock => mesterIntroAnimationBlock;
+        public EpisodeAnimation MasterFinalAnimationBlock => masterFinalAnimationBlock;
         public Chapter[] Chapters => chapters;
         public string[] CreditNames => creditNames;
     }

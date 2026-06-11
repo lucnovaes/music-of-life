@@ -7,14 +7,14 @@ namespace mil.Data
     {
         [SerializeField] private string chapterName;
         [SerializeField] private ShaderType visualShaderType;
-        [SerializeField] private AnimationClip introAnimation;
-        [SerializeField] private AnimationClip finalAnimation;
+        [SerializeField] private EpisodeAnimation introAnimationBlock;
+        [SerializeField] private EpisodeAnimation finalAnimationBlock;
         [SerializeField] private Song[] songs;
 
         public string ChapterName => chapterName;
         public ShaderType VisualShaderType => visualShaderType;
-        public AnimationClip IntroAnimation => introAnimation;
-        public AnimationClip FinalAnimation => finalAnimation;
+        public EpisodeAnimation IntroAnimationBlock => introAnimationBlock;
+        public EpisodeAnimation FinalAnimationBlock => finalAnimationBlock;
         public Song[] Songs => songs;
     }
 }
