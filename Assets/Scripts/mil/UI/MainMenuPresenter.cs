@@ -22,8 +22,8 @@ namespace mil.UI
         [SerializeField] private float punchAmount = 0.05f;
 
         [Header("Shake Rotation Settings")]
-        [SerializeField] private float shakeDuration = 0.25f;     // Quanto tempo dura o balanço
-        [SerializeField] private float shakeStrength = 3f;        // Intensidade em graus do balanço (3 graus é perfeito e sutil)
+        [SerializeField] private float shakeDuration = 0.25f;
+        [SerializeField] private float shakeStrength = 3f;
         [SerializeField] private int shakeVibrato = 6;
 
         private TextMeshProUGUI[] _menuOptions;

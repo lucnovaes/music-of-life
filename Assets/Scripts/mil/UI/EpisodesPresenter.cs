@@ -19,7 +19,7 @@ namespace mil.UI
         [SerializeField] private float selectedScale = 1.08f;
         [SerializeField] private float selectedIndentX = 15f;
 
-        private EpisodeManifest[] _cachedEpisodes;
+        private Episode[] _cachedEpisodes;
         private TextMeshProUGUI[] _episodeTexts;
         private Material[] _optionMaterials;
         private Tweener[] _glowTweens;
@@ -28,7 +28,7 @@ namespace mil.UI
 
         private static readonly int GlowPowerId = Shader.PropertyToID("_GlowPower");
 
-        public void BuildEpisodeList(EpisodeManifest[] episodes, int defaultSelected)
+        public void BuildEpisodeList(Episode[] episodes, int defaultSelected)
         {
             _cachedEpisodes = episodes;
             _episodeTexts = new TextMeshProUGUI[episodes.Length];

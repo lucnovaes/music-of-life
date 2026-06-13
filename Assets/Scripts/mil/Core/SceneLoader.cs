@@ -13,7 +13,7 @@ namespace mil.Core
             { GameScene.Boot, "BootScene" },
             { GameScene.SplashScreen, "SplashScene" },
             { GameScene.MainMenu, "MainMenuScene" },
-            { GameScene.GameLoop, "GameScene" }
+            { GameScene.Stage, "StageScene" }
         };
 
         public SceneLoader(LifetimeScope currentScope)

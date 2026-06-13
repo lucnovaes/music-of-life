@@ -5,6 +5,6 @@ namespace mil.Core
         Boot,
         SplashScreen,
         MainMenu,
-        GameLoop
+        Stage,
     }
 }

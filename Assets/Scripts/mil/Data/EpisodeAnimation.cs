@@ -6,7 +6,7 @@ namespace mil.Data
     public sealed class EpisodeAnimation : ScriptableObject
     {
         [Header("Visual Asset")]
-        [SerializeField] private AnimationClip animationClip;
+        [SerializeField] private GameObject animation;
         [SerializeField] private float durationSeconds;
 
         [Header("Audio Tracking (FMOD Event Paths)")]
@@ -15,7 +15,7 @@ namespace mil.Data
         [SerializeField] private string soundtrackAudioEventPath;
 
 
-        public AnimationClip AnimationClip => animationClip;
+        public GameObject Animation => animation;
         public float DurationSeconds => durationSeconds;
         public string MainAudioEventPath => mainAudioEventPath;
         public string TextureAudioEventPath => textureAudioEventPath;

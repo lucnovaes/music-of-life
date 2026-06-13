@@ -8,15 +8,17 @@ namespace mil.Data
         [SerializeField] private string songName;
         [SerializeField] private string backgroundLoopAudioEvent;
         [SerializeField] private string mainAudioEvent;
-        [SerializeField] private AnimationClip backgroundLoopAnimation;
-        [SerializeField] private TrackTimeline[] difficultyChallenges;
+        [SerializeField] private GameObject backgroundLoopAnimation;
+        [Header("MIDI Integration")]
+        [SerializeField] private string midiFileName; // Ex: "Músicas/fase1_expert.mid"
+        
         [SerializeField] private int loopMeasurement;
 
         public string SongName => songName;
         public string BackgroundLoopAudioEvent => backgroundLoopAudioEvent;
         public string MainAudioEvent => mainAudioEvent;
-        public AnimationClip BackgroundLoopAnimation => backgroundLoopAnimation;
-        public TrackTimeline[] DifficultyChallenges => difficultyChallenges;
+        public GameObject BackgroundLoopAnimation => backgroundLoopAnimation;
+        public string MidiFileName => midiFileName;
         public int LoopMeasurement => loopMeasurement;
     }
 }

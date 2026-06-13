@@ -3,7 +3,7 @@ using UnityEngine;
 namespace mil.Data
 {
     [CreateAssetMenu(fileName = "NewEpisode", menuName = "mil/Data/Episode")]
-    public sealed class EpisodeManifest : ScriptableObject
+    public sealed class Episode : ScriptableObject
     {
         [SerializeField] private string episodeTitle;
         [SerializeField] private Sprite thumbnailImage;

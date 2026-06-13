@@ -15,16 +15,20 @@ namespace mil.Core
 
         protected override void Configure(IContainerBuilder builder)
         {
+            //Setting up Platform Services
 #if UNITY_EDITOR
             builder.Register<IPlatformService, EditorPlatformService>(Lifetime.Singleton);
 #else
             builder.Register<IPlatformService, SteamPlatformService>(Lifetime.Singleton);
 #endif
 
-            builder.Register<SceneLoader>(Lifetime.Singleton);
+            //Setting up Models
+            builder.Register<StageSessionModel>(Lifetime.Singleton);
             builder.Register<GameSettingsModel>(Lifetime.Singleton);
-            builder.Register<InputHandler>(Lifetime.Singleton).AsImplementedInterfaces().AsSelf();
 
+            //Setting up Services
+            builder.Register<SceneLoader>(Lifetime.Singleton);
+            builder.Register<InputHandler>(Lifetime.Singleton).AsImplementedInterfaces().AsSelf();
             builder.RegisterEntryPoint<Bootstrapper>();
 
         }
