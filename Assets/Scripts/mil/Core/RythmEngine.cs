@@ -10,11 +10,15 @@ namespace mil.Core
         private readonly AudioClock _audioClock;
         private readonly InputHandler _inputHandler;
 
-        private const float HitWindowMs = 120f; // Janela única universal confortável de acerto
-        private const float LookAheadMs = 2500f; // Tempo de viagem na Spline
+        private const float HitWindowMs = 120f;
+        private const float LookAheadMs = 2500f;
 
         private float[] _timestampsMs;
         private int[] _noteTypes;
+        private float[] _durationsMs;
+        private bool[] _isHoldNotes;
+        private int _nextNoteIndexToSpawn;
+
         private bool _isEngineActive;
         private bool _isGameplayStarted;
         private bool _hasTriggeredPreparation;
@@ -24,13 +28,18 @@ namespace mil.Core
         private int _loopDurationMs;
         private int _lastBeatCounted = -1;
 
-        // Controle cíclico para não spawnar a mesma nota mais de uma vez na mesma rodada do loop
         private readonly HashSet<int> _spawnedNotesInCurrentLoop = new();
         private readonly List<float> _activeNoteTimesOnScreenMs = new();
         private readonly List<int> _activeNoteTypesOnScreen = new();
 
-        public event Action<NoteResult> OnNoteProcessed;
-        public event Action<float, int> OnNoteSpawned;
+        private readonly bool[] _isButtonHeld = new bool[4];
+        private float _currentHoldTargetTimeMs;
+        private int _currentHoldTargetType;
+        private bool _isHoldingActive;
+
+        // EXPANSÃO DO EVENTO: Repassa o Timestamp exato da nota processada para a UI não apagar a nota errada!
+        public event Action<NoteResult, float> OnNoteProcessedWithTimestamp;
+        public event Action<float, float, int, bool> OnNoteSpawnedWithHoldData;
         public event Action<bool> OnTrackVisibilityChanged;
         public event Action<float> OnMetronomeBeat;
         public event Action OnGameplayLoopStarted;
@@ -41,24 +50,38 @@ namespace mil.Core
             _inputHandler = inputHandler;
         }
 
-        public void SetupTrack(float[] timestampsMs, int[] noteTypes, int bpm, int loopDurationMs, int loopMeasurement)
+        public void SetupTrack(MidiTrackParser.GeneratedTimelineData timelineData, int bpm, int loopDurationMs, int loopMeasurement)
         {
-            _timestampsMs = timestampsMs;
-            _noteTypes = noteTypes;
-            _loopDurationMs = loopDurationMs;
+            var notes = timelineData.Notes;
+            _timestampsMs = new float[notes.Length];
+            _noteTypes = new int[notes.Length];
+            _durationsMs = new float[notes.Length];
+            _isHoldNotes = new bool[notes.Length];
 
+            for (int i = 0; i < notes.Length; i++)
+            {
+                _timestampsMs[i] = notes[i].TimestampMs;
+                _noteTypes[i] = notes[i].NoteType;
+                _durationsMs[i] = notes[i].DurationMs;
+                _isHoldNotes[i] = notes[i].IsHoldNote;
+            }
+
+            _loopDurationMs = loopDurationMs;
             _msPerBeat = 60000f / bpm;
             _msPerMeasure = _msPerBeat * (loopMeasurement > 0 ? loopMeasurement : 4);
 
+            _nextNoteIndexToSpawn = 0;
             _isGameplayStarted = false;
             _hasTriggeredPreparation = false;
             _lastBeatCounted = -1;
+            _isHoldingActive = false;
 
             _activeNoteTimesOnScreenMs.Clear();
             _activeNoteTypesOnScreen.Clear();
             _spawnedNotesInCurrentLoop.Clear();
+            Array.Clear(_isButtonHeld, 0, _isButtonHeld.Length);
 
-            _isEngineActive = (_timestampsMs != null && _timestampsMs.Length > 0);
+            _isEngineActive = (_timestampsMs.Length > 0);
 
             if (_isEngineActive)
             {
@@ -80,25 +103,19 @@ namespace mil.Core
         {
             if (!_isEngineActive || !_audioClock.IsPlaying) return;
 
-            // Coleta a posição real da agulha física (Sempre reseta entre 0 e _loopDurationMs)
             double currentAudioTimeMs = _audioClock.CurrentAudioTimeMs;
 
-            // -----------------------------------------------------------------
-            // FASE 1: CONTAGEM REGRESSIVA SÍNCRONA POR HARDWARE (LOOP 1)
-            // -----------------------------------------------------------------
             if (!_isGameplayStarted)
             {
                 float timeRemainingInLoop = _loopDurationMs - (float)currentAudioTimeMs;
                 float triggerThresholdMs = _msPerMeasure + LookAheadMs;
 
-                // Liga as pistas com antecedência elástica de 1 Compasso + Tempo de Viagem
                 if (timeRemainingInLoop <= triggerThresholdMs && !_hasTriggeredPreparation)
                 {
                     _hasTriggeredPreparation = true;
                     OnTrackVisibilityChanged?.Invoke(true);
                 }
 
-                // Dispara o círculo contador guiado frame a frame pelo tempo bruto do som
                 if (_hasTriggeredPreparation && timeRemainingInLoop <= _msPerMeasure && timeRemainingInLoop > 0)
                 {
                     int currentBeatIndex = Mathf.CeilToInt(timeRemainingInLoop / _msPerBeat);
@@ -106,113 +123,122 @@ namespace mil.Core
                     {
                         _lastBeatCounted = currentBeatIndex;
                         OnMetronomeBeat?.Invoke(_msPerBeat / 1000f);
-                        Debug.Log($"[Metrônomo Hardware] ➔ {currentBeatIndex}");
                     }
                 }
 
-                // DETECÇÃO CRÍTICA DA VIRADA FÍSICA:
-                // Quando o FMOD zera a agulha de áudio, entramos oficialmente no Loop 2 de gameplay!
                 if (currentAudioTimeMs < _msPerBeat && _hasTriggeredPreparation)
                 {
                     _isGameplayStarted = true;
-                    OnGameplayLoopStarted?.Invoke(); // Dispara o volume do solo do instrumento
+                    OnGameplayLoopStarted?.Invoke();
                     _spawnedNotesInCurrentLoop.Clear();
-                    Debug.Log("[RhythmEngine] ➔ VIRADA FÍSICA DETECTADA: Loop de Gameplay Liberado!");
                 }
-
                 return;
             }
 
-            // -----------------------------------------------------------------
-            // FASE 2: GAMEPLAY ATIVA COM ARRANJO MODULAR (LOOP 2)
-            // -----------------------------------------------------------------
-            for (int i = 0; i < _timestampsMs.Length; i++)
+            while (_nextNoteIndexToSpawn < _timestampsMs.Length &&
+                   _timestampsMs[_nextNoteIndexToSpawn] - currentAudioTimeMs <= LookAheadMs)
             {
-                if (_spawnedNotesInCurrentLoop.Contains(i)) continue;
+                _spawnedNotesInCurrentLoop.Add(_nextNoteIndexToSpawn);
 
-                float noteTime = _timestampsMs[i];
+                float noteTime = _timestampsMs[_nextNoteIndexToSpawn];
+                int noteType = _noteTypes[_nextNoteIndexToSpawn];
+                float duration = _durationsMs[_nextNoteIndexToSpawn];
+                bool isHold = _isHoldNotes[_nextNoteIndexToSpawn];
 
-                // CALCULO DE ANTECIPAÇÃO CÍCLICA:
-                // Avalia a distância da nota em relação à agulha física corrente do loop
-                float timeUntilNote = noteTime - (float)currentAudioTimeMs;
+                _activeNoteTimesOnScreenMs.Add(noteTime);
+                _activeNoteTypesOnScreen.Add(noteType);
 
-                if (timeUntilNote > 0 && timeUntilNote <= LookAheadMs)
+                OnNoteSpawnedWithHoldData?.Invoke(noteTime, duration, noteType, isHold);
+                _nextNoteIndexToSpawn++;
+            }
+
+            if (_isHoldingActive)
+            {
+                int targetTrack = _currentHoldTargetType >= 4 ? 0 : _currentHoldTargetType;
+                if (Input.GetKeyUp(KeyCode.D) || Input.GetKeyUp(KeyCode.F) || Input.GetKeyUp(KeyCode.J) || Input.GetKeyUp(KeyCode.K))
                 {
-                    _spawnedNotesInCurrentLoop.Add(i);
-                    _activeNoteTimesOnScreenMs.Add(noteTime);
-                    _activeNoteTypesOnScreen.Add(_noteTypes[i]);
+                    _isButtonHeld[targetTrack] = false;
+                }
 
-                    // Passa o tempo bruto da nota para a Spline renderizar o avanço proporcional
-                    OnNoteSpawned?.Invoke(noteTime, _noteTypes[i]);
+                if (!_isButtonHeld[targetTrack])
+                {
+                    _isHoldingActive = false;
+                    OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, _currentHoldTargetTimeMs);
                 }
             }
 
-            // Verificação de Miss Automático se a nota passou do alvo
+            // Miss Automático por estourar o tempo (Passou direto da linha de chegada)
             while (_activeNoteTimesOnScreenMs.Count > 0 &&
                    currentAudioTimeMs - _activeNoteTimesOnScreenMs[0] > HitWindowMs)
             {
+                float passedTime = _activeNoteTimesOnScreenMs[0];
                 int passedNoteType = _activeNoteTypesOnScreen[0];
+
                 _activeNoteTimesOnScreenMs.RemoveAt(0);
                 _activeNoteTypesOnScreen.RemoveAt(0);
 
-                if (passedNoteType == 5) OnNoteProcessed?.Invoke(NoteResult.Success);
-                else OnNoteProcessed?.Invoke(NoteResult.Miss);
+                if (!_isHoldingActive || _currentHoldTargetTimeMs != passedTime)
+                {
+                    var res = (passedNoteType == 5) ? NoteResult.Success : NoteResult.Miss;
+                    OnNoteProcessedWithTimestamp?.Invoke(res, passedTime);
+                }
             }
         }
 
-        private void HandleTrack1Input() => ProcessInputAttempt(0);
-        private void HandleTrack2Input() => ProcessInputAttempt(1);
-        private void HandleTrack3Input() => ProcessInputAttempt(2);
-        private void HandleTrack4Input() => ProcessInputAttempt(3);
+        private void HandleTrack1Input() { _isButtonHeld[0] = true; ProcessInputAttempt(0); }
+        private void HandleTrack2Input() { _isButtonHeld[1] = true; ProcessInputAttempt(1); }
+        private void HandleTrack3Input() { _isButtonHeld[2] = true; ProcessInputAttempt(2); }
+        private void HandleTrack4Input() { _isButtonHeld[3] = true; ProcessInputAttempt(3); }
 
         private void ProcessInputAttempt(int pressedTrackIndex)
         {
             if (!_isEngineActive || !_isGameplayStarted || _activeNoteTimesOnScreenMs.Count == 0) return;
 
-            // Sincroniza o cálculo do clique usando a mesma agulha física cíclica do FMOD
             double currentAudioTimeMs = _audioClock.CurrentAudioTimeMs;
+
+            // Procura se a primeira nota da fila está na janela de colisão universal legítima
             float targetNoteTimeMs = _activeNoteTimesOnScreenMs[0];
             int targetNoteType = _activeNoteTypesOnScreen[0];
 
             float timeDifferenceMs = Mathf.Abs((float)(currentAudioTimeMs - targetNoteTimeMs));
+
+            // SE APERTOU FORA DA JANELA, IGNORA O CLIQUE! Evita o bug de apagar notas no meio da Spline!
             if (timeDifferenceMs > HitWindowMs) return;
 
             _activeNoteTimesOnScreenMs.RemoveAt(0);
             _activeNoteTypesOnScreen.RemoveAt(0);
 
-            if (targetNoteType == 5) OnNoteProcessed?.Invoke(NoteResult.Miss);
-            else if (targetNoteType == 4) OnNoteProcessed?.Invoke(NoteResult.Success);
-            else if (targetNoteType == pressedTrackIndex) OnNoteProcessed?.Invoke(NoteResult.Success);
-            else OnNoteProcessed?.Invoke(NoteResult.Miss);
+            if (targetNoteType == 5)
+            {
+                OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, targetNoteTimeMs);
+                return;
+            }
+
+            bool isCorrectTrack = (targetNoteType == 4 || targetNoteType == pressedTrackIndex);
+
+            if (isCorrectTrack)
+            {
+                // Verifica se a nota disparada possui a propriedade Hold ativa na memória estática
+                int indexInMidi = Array.IndexOf(_timestampsMs, targetNoteTimeMs);
+                bool checkIsHold = (indexInMidi >= 0 && _isHoldNotes[indexInMidi]);
+
+                if (checkIsHold)
+                {
+                    _isHoldingActive = true;
+                    _currentHoldTargetTimeMs = targetNoteTimeMs;
+                    _currentHoldTargetType = targetNoteType;
+                }
+
+                OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Success, targetNoteTimeMs);
+            }
+            else
+            {
+                OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, targetNoteTimeMs);
+            }
         }
 
-        public void StopEngine()
-        {
-            if (!_isEngineActive) return;
-            _isEngineActive = false;
-            _isGameplayStarted = false;
-
-            _inputHandler.OnNoteTrack1 -= HandleTrack1Input;
-            _inputHandler.OnNoteTrack2 -= HandleTrack2Input;
-            _inputHandler.OnNoteTrack3 -= HandleTrack3Input;
-            _inputHandler.OnNoteTrack4 -= HandleTrack4Input;
-
-            _activeNoteTimesOnScreenMs.Clear();
-            _activeNoteTypesOnScreen.Clear();
-            _spawnedNotesInCurrentLoop.Clear();
-        }
-
-        public void ClearTimeline()
-        {
-            _activeNoteTimesOnScreenMs.Clear();
-            _activeNoteTypesOnScreen.Clear();
-            _spawnedNotesInCurrentLoop.Clear();
-            _timestampsMs = null;
-            _noteTypes = null;
-            _isGameplayStarted = false;
-            _hasTriggeredPreparation = false;
-        }
-
+        public void CompleteHoldActive() => _isHoldingActive = false; public void StopEngine() { if (!_isEngineActive) return; _isEngineActive = false; _isGameplayStarted = false; _isHoldingActive = false; _inputHandler.OnNoteTrack1 -= HandleTrack1Input; _inputHandler.OnNoteTrack2 -= HandleTrack2Input; _inputHandler.OnNoteTrack3 -= HandleTrack3Input; _inputHandler.OnNoteTrack4 -= HandleTrack4Input; _activeNoteTimesOnScreenMs.Clear(); _activeNoteTypesOnScreen.Clear(); _spawnedNotesInCurrentLoop.Clear(); }
+        public void ClearTimeline() { _activeNoteTimesOnScreenMs.Clear(); _activeNoteTypesOnScreen.Clear(); _spawnedNotesInCurrentLoop.Clear(); _timestampsMs = null; _noteTypes = null; _nextNoteIndexToSpawn = 0; _isGameplayStarted = false; _hasTriggeredPreparation = false; _isHoldingActive = false; }
         public void Dispose() => StopEngine();
     }
 }

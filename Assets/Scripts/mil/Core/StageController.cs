@@ -150,7 +150,7 @@ namespace mil.Core
 
             // Vinculação reativa de eventos da máquina de estados por frames
             _rhythmEngine.OnGameplayLoopStarted += HandleLeadAudioTurnOn;
-            _rhythmEngine.OnNoteProcessed += EvaluateInstrumentAudioFeedback;
+            _rhythmEngine.OnNoteProcessedWithTimestamp += EvaluateHoldAudioFeedback;
             _rhythmEngine.OnMetronomeBeat += HandleMetronomeUIBeat;
 
             if (_rhythmStagePresenter != null)
@@ -161,10 +161,24 @@ namespace mil.Core
             // Alimenta o motor rítmico com os carimbos de tempo extraídos do arquivo MIDI
             if (!string.IsNullOrEmpty(song.MidiFileName))
             {
+                // O parser decodifica o arquivo e entrega a struct GeneratedTimelineData legítima!
                 var midiData = MidiTrackParser.ParseMidiFile(song.MidiFileName);
-                if (midiData.TimestampsMs != null && midiData.TimestampsMs.Length > 0)
+
+                // CORREÇÃO DE INFRAESTRUTURA:
+                // Passamos a struct midiData inteira direta para o SetupTrack purificado do motor!
+                if (midiData.Notes != null && midiData.Notes.Length > 0)
                 {
-                    _rhythmEngine.SetupTrack(midiData.TimestampsMs, midiData.NoteTypes, bpm, loopDurationMs, song.LoopMeasurement);
+                    _rhythmEngine.SetupTrack(
+                        midiData,
+                        bpm,
+                        loopDurationMs,
+                        song.LoopMeasurement
+                    );
+                    Debug.Log($"[StageController] Motor alimentado com sucesso via Struct de Notas para '{song.SongName}'.");
+                }
+                else
+                {
+                    Debug.LogError($"[StageController] Falha Crítica: Nenhuma nota válida foi encontrada na struct do MIDI '{song.MidiFileName}'!");
                 }
             }
 
@@ -175,7 +189,7 @@ namespace mil.Core
 
             _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
             _rhythmEngine.OnGameplayLoopStarted -= HandleLeadAudioTurnOn;
-            _rhythmEngine.OnNoteProcessed -= EvaluateInstrumentAudioFeedback;
+            _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateHoldAudioFeedback;
             _rhythmEngine.StopEngine();
             CleanActiveSongLoop();
         }
@@ -199,15 +213,11 @@ namespace mil.Core
             }
         }
 
-        private void EvaluateInstrumentAudioFeedback(NoteResult result)
+        private void EvaluateHoldAudioFeedback(NoteResult result, float timestampMs)
         {
             if (!_songAudioInstance.isValid()) return;
-
-            // Controle dinâmico reativo do parâmetro de volume da track Solo
-            // Se o jogador acertou a nota (Success) -> LeadMute vai para 0 (Som aberto)
-            // Se errou ou bateu em obstáculo (Miss) -> LeadMute vai para 1 (Muta o solo)
-            float parameterValue = (result == NoteResult.Success) ? 0.0f : 1.0f;
-            _songAudioInstance.setParameterByName("LeadMute", parameterValue);
+            float targetVolume = (result == NoteResult.Success) ? 1.0f : 0.0f;
+            _songAudioInstance.setParameterByName("LeadMute", targetVolume == 1f ? 0f : 1f);
         }
 
         private void CleanActiveSongLoop()
@@ -238,6 +248,12 @@ namespace mil.Core
             var coreAudioInstance = _mainAudioInstance.isValid() ? _mainAudioInstance : _soundtrackAudioInstance; _audioClock.SyncWithEvent(coreAudioInstance, bpm); await UniTask.Delay(System.TimeSpan.FromSeconds(animationBlock.DurationSeconds)); CleanActiveBlockAssets();
         }
         private void CleanActiveBlockAssets() { _audioClock.StopClock(); _visualController.ClearActiveShader(); if (_spawnedAnimationInstance != null) Object.Destroy(_spawnedAnimationInstance); if (_mainAudioInstance.isValid()) { _mainAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE); _mainAudioInstance.release(); } if (_textureAudioInstance.isValid()) { _textureAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE); _textureAudioInstance.release(); } if (_soundtrackAudioInstance.isValid()) { _soundtrackAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE); _mainAudioInstance.release(); } }
-        public void Dispose() { _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat; _rhythmEngine.OnGameplayLoopStarted -= HandleLeadAudioTurnOn; _rhythmEngine.OnNoteProcessed -= EvaluateInstrumentAudioFeedback; _rhythmEngine.StopEngine(); CleanActiveBlockAssets(); CleanActiveSongLoop(); }
+        public void Dispose()
+        {
+            _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
+            _rhythmEngine.OnGameplayLoopStarted -= HandleLeadAudioTurnOn;
+            _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateHoldAudioFeedback;
+            _rhythmEngine.StopEngine(); CleanActiveBlockAssets(); CleanActiveSongLoop();
+        }
     }
 }

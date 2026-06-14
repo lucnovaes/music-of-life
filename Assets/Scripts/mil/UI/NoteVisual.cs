@@ -6,77 +6,114 @@ namespace mil.UI
 {
     public sealed class RhythmNoteVisual : MonoBehaviour
     {
-        [Header("Visual Components")]
-        [SerializeField] private SpriteRenderer spriteRenderer;
+        [Header("Circular Visual Components")]
+        [SerializeField] private SpriteRenderer backgroundOutline; // Filho 1: O anel de contorno fixo
+        [SerializeField] private SpriteRenderer centerCircle;      // Filho 2: O miolo preenchido que infla
 
         private float _targetTimestampMs;
+        private float _durationMs;
         private int _noteType;
         private int _associatedTrackIndex;
+
         private bool _isActive;
         private bool _isDying;
+        private bool _isHoldNote;
+        private bool _isBeingHeld;
 
-        // Forçamos a escala padrão (1,1,1) como fallback anti-bug de inicialização desativada
+        private float _holdTimerMs;
+        private System.Action _onHoldCompleteCallback;
         private Vector3 _originalScale = Vector3.one;
+        private readonly Vector3 _shrunkCenterScale = new Vector3(0.35f, 0.35f, 0.35f); // Começa bem menor para dar o efeito vazado
 
         public float TargetTimestampMs => _targetTimestampMs;
         public int NoteType => _noteType;
         public int AssociatedTrackIndex => _associatedTrackIndex;
         public bool IsActive => _isActive;
+        // Adicione esta propriedade pública logo acima do método Setup no seu RhythmNoteVisual.cs:
+        public bool IsHoldNote => _isHoldNote;
+
 
         private void Awake()
         {
-            if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
+            if (backgroundOutline == null && transform.childCount > 0) backgroundOutline = transform.GetChild(0).GetComponent<SpriteRenderer>();
+            if (centerCircle == null && transform.childCount > 1) centerCircle = transform.GetChild(1).GetComponent<SpriteRenderer>();
 
-            // Se o objeto nascer com escala zerada por falha de hierarquia, força o padrão estável
             if (transform.localScale.sqrMagnitude > 0.01f)
             {
                 _originalScale = transform.localScale;
             }
         }
 
-        public void Setup(float targetTimestampMs, int noteType, int trackIndex)
+        public void Setup(float targetTimestampMs, float durationMs, int noteType, int trackIndex, bool isHoldNote)
         {
             transform.DOKill();
-            if (spriteRenderer != null) spriteRenderer.DOKill();
+            if (backgroundOutline != null) backgroundOutline.DOKill();
+            if (centerCircle != null) { centerCircle.DOKill(); centerCircle.transform.DOKill(); }
 
             _targetTimestampMs = targetTimestampMs;
+            _durationMs = durationMs;
             _noteType = noteType;
             _associatedTrackIndex = trackIndex;
+            _isHoldNote = isHoldNote;
 
             _isActive = true;
             _isDying = false;
+            _isBeingHeld = false;
+            _holdTimerMs = 0f;
 
+            // Reseta a escala do PAI para o padrão original de pool
             transform.localScale = _originalScale;
             gameObject.SetActive(true);
 
             ApplyBasePaletteColor();
+
+            // ➔ TRAVA DE INICIALIZAÇÃO VISUAL:
+            // Garante com 100% de certeza que o miolo central nasça ENCOLHIDO (vazado) 
+            // no frame zero do spawn caso a nota seja carimbada como Hold Note pelo parser MIDI!
+            if (centerCircle != null)
+            {
+                centerCircle.transform.localScale = _isHoldNote ? _shrunkCenterScale : Vector3.one;
+
+                // Ativa um log rápido para você ver no console se o visual recebeu o comando
+                // Debug.Log($"[Visual Note] Nota aplicada. Tipo: {noteType} | IsHold: {_isHoldNote} | Escala Miolo: {centerCircle.transform.localScale}");
+            }
         }
 
         private void ApplyBasePaletteColor()
         {
-            if (spriteRenderer == null) return;
-
+            Color targetColor = Color.white;
             switch (_noteType)
             {
-                case 0: spriteRenderer.color = new Color(0.0f, 0.25f, 0.7f, 1.0f); break;   // Grave: Azul Real
-                case 1: spriteRenderer.color = new Color(0.0f, 0.75f, 1.0f, 1.0f); break;  // Semi-Grave: Ciano
-                case 2: spriteRenderer.color = new Color(1.0f, 0.08f, 0.58f, 1.0f); break; // Semi-Aguda: Rosa Neon
-                case 3: spriteRenderer.color = new Color(0.0f, 1.0f, 0.4f, 1.0f); break;   // Aguda: Verde Limão
-                case 4: spriteRenderer.color = new Color(1.0f, 1.0f, 1.0f, 0.45f); break;  // Fantasma: Branco Translúcido
-                case 5: spriteRenderer.color = new Color(1.0f, 0.1f, 0.1f, 1.0f); break;    // Errada: Vermelho Alerta
+                case 0: targetColor = new Color(0.0f, 0.25f, 0.7f, 1.0f); break;   // Grave: Azul
+                case 1: targetColor = new Color(0.0f, 0.75f, 1.0f, 1.0f); break;  // Semi-Grave: Ciano
+                case 2: targetColor = new Color(1.0f, 0.08f, 0.58f, 1.0f); break; // Semi-Aguda: Rosa
+                case 3: targetColor = new Color(0.0f, 1.0f, 0.4f, 1.0f); break;   // Aguda: Verde
+                case 4: targetColor = new Color(1.0f, 1.0f, 1.0f, 0.45f); break;  // Fantasma: Branco
+                case 5: targetColor = new Color(1.0f, 0.1f, 0.1f, 1.0f); break;    // Errada: Vermelho
             }
+
+            if (backgroundOutline != null) backgroundOutline.color = targetColor;
+            if (centerCircle != null) centerCircle.color = targetColor;
+        }
+        public void StartHoldCharging(System.Action onComplete)
+        {
+            if (!_isActive || _isDying) return;
+            _isBeingHeld = true;
+            _holdTimerMs = 0f;
+            _onHoldCompleteCallback = onComplete;
         }
 
         public void PlayHitFeedback(System.Action onComplete)
         {
             _isDying = true;
-            transform.DOScale(_originalScale * 3.0f, 0.2f).SetEase(Ease.OutExpo);
+            _isBeingHeld = false;
+            transform.DOScale(_originalScale * 2.2f, 0.15f).SetEase(Ease.OutExpo);
 
-            if (spriteRenderer != null)
+            if (backgroundOutline != null) backgroundOutline.DOFade(0f, 0.15f);
+            if (centerCircle != null)
             {
-                spriteRenderer.color = Color.white;
-                spriteRenderer.DOFade(0f, 0.2f)
-                    .SetEase(Ease.OutQuad)
+                centerCircle.DOColor(Color.white, 0.04f);
+                centerCircle.DOFade(0f, 0.15f)
                     .OnComplete(() =>
                     {
                         Deactivate();
@@ -93,17 +130,17 @@ namespace mil.UI
         public void PlayMissFeedback(System.Action onComplete)
         {
             _isDying = true;
-            transform.DOScale(Vector3.zero, 0.15f).SetEase(Ease.InBack);
+            _isBeingHeld = false;
+            transform.DOScale(Vector3.zero, 0.12f).SetEase(Ease.InBack);
 
-            if (spriteRenderer != null)
+            if (backgroundOutline != null) backgroundOutline.DOFade(0f, 0.12f);
+            if (centerCircle != null)
             {
-                spriteRenderer.DOColor(new Color(0.15f, 0.15f, 0.15f, 0f), 0.15f)
-                    .SetEase(Ease.InQuad)
-                    .OnComplete(() =>
-                    {
-                        Deactivate();
-                        onComplete?.Invoke();
-                    });
+                centerCircle.DOFade(0f, 0.12f).OnComplete(() =>
+                {
+                    Deactivate();
+                    onComplete?.Invoke();
+                });
             }
             else
             {
@@ -116,6 +153,7 @@ namespace mil.UI
         {
             _isActive = false;
             _isDying = false;
+            _isBeingHeld = false;
             gameObject.SetActive(false);
         }
 
@@ -123,17 +161,39 @@ namespace mil.UI
         {
             if (!_isActive || _isDying || splineContainer == null) return;
 
+            // ➔ COMPORTAMENTO A: EXPANSÃO CONCÊNTRICA DO MIOLO (PLAYER SEGURANDO)
+            if (_isBeingHeld)
+            {
+                // Trava fixa no final da pista (Alvo de impacto)
+                transform.localPosition = splineContainer.EvaluatePosition(1f);
+
+                _holdTimerMs += Time.deltaTime * 1000f; // Converte para milissegundos
+                float progress = _holdTimerMs / _durationMs;
+                progress = Mathf.Clamp01(progress);
+
+                if (centerCircle != null)
+                {
+                    // Infla gradualmente do tamanho encolhido até engolir o contorno em 1.0x!
+                    float scaleFactor = Mathf.Lerp(_shrunkCenterScale.x, 1.0f, progress);
+                    centerCircle.transform.localScale = new Vector3(scaleFactor, scaleFactor, scaleFactor);
+                }
+
+                // Completou a barra inteira com sucesso! Explode e some!
+                if (progress >= 1f)
+                {
+                    _isBeingHeld = false;
+                    _onHoldCompleteCallback?.Invoke();
+                    PlayHitFeedback(null);
+                }
+                return;
+            }
+
+            // ➔ COMPORTAMENTO B: MOVIMENTO LINEAR PADRÃO PELA SPLINE
             float timeRemainingMs = _targetTimestampMs - (float)currentAudioTimeMs;
-            float progress = 1.0f - (timeRemainingMs / lookAheadMs);
-            progress = Mathf.Clamp01(progress);
+            float travelProgress = 1.0f - (timeRemainingMs / lookAheadMs);
+            travelProgress = Mathf.Clamp01(travelProgress);
 
-            transform.localPosition = splineContainer.EvaluatePosition(progress);
-        }
-
-        private void OnDestroy()
-        {
-            transform.DOKill();
-            if (spriteRenderer != null) spriteRenderer.DOKill();
+            transform.localPosition = splineContainer.EvaluatePosition(travelProgress);
         }
     }
 }

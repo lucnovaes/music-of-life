@@ -9,7 +9,7 @@ namespace mil.UI
     public sealed class RhythmStagePresenter : MonoBehaviour
     {
         [Header("Hierarchy Containers")]
-        [SerializeField] private GameObject tracksVisualContainer; // NOVO: GameObject filho que agrupa as pistas
+        [SerializeField] private GameObject tracksVisualContainer;
 
         [Header("Spline Tracks (Mundo 3D)")]
         [SerializeField] private SplineContainer[] trackSplines;
@@ -44,7 +44,6 @@ namespace mil.UI
                 }
             }
 
-            // Inicializa a piscina fixa anexada ao próprio Presenter (Sempre Ativado!)
             if (_notePool.Count == 0)
             {
                 for (int i = 0; i < initialPoolSize; i++)
@@ -55,12 +54,12 @@ namespace mil.UI
                 }
             }
 
-            _rhythmEngine.OnNoteSpawned -= SpawnNoteVisual;
-            _rhythmEngine.OnNoteProcessed -= ConsumeNoteVisual;
+            _rhythmEngine.OnNoteSpawnedWithHoldData -= SpawnNoteVisual;
+            _rhythmEngine.OnNoteProcessedWithTimestamp -= ConsumeNoteVisualWithTimestamp;
             _rhythmEngine.OnTrackVisibilityChanged -= SetVisible;
 
-            _rhythmEngine.OnNoteSpawned += SpawnNoteVisual;
-            _rhythmEngine.OnNoteProcessed += ConsumeNoteVisual;
+            _rhythmEngine.OnNoteSpawnedWithHoldData += SpawnNoteVisual;
+            _rhythmEngine.OnNoteProcessedWithTimestamp += ConsumeNoteVisualWithTimestamp;
             _rhythmEngine.OnTrackVisibilityChanged += SetVisible;
         }
 
@@ -91,7 +90,7 @@ namespace mil.UI
             }
         }
 
-        private void SpawnNoteVisual(float targetTimestampMs, int noteType)
+        private void SpawnNoteVisual(float targetTimestampMs, float durationMs, int noteType, bool isHoldNote)
         {
             int targetTrackIndex;
 
@@ -127,36 +126,57 @@ namespace mil.UI
             noteToSpawn.transform.localRotation = Quaternion.identity;
             noteToSpawn.transform.localPosition = targetSpline.EvaluatePosition(0f);
 
-            noteToSpawn.Setup(targetTimestampMs, noteType, targetTrackIndex);
+            noteToSpawn.Setup(targetTimestampMs, durationMs, noteType, targetTrackIndex, isHoldNote);
             _activeNotes.Add(noteToSpawn);
         }
 
-        private void ConsumeNoteVisual(NoteResult result)
+        /// <summary>
+        /// PROTETOR DE INSTÂNCIA: Varre e localiza a nota exata correspondente ao Timestamp avaliado,
+        /// impedindo completamente o sumiço de notas no meio da pista!
+        /// </summary>
+        private void ConsumeNoteVisualWithTimestamp(NoteResult result, float targetTimestampMs)
         {
-            if (_activeNotes.Count == 0) return;
+            RhythmNoteVisual noteToProcess = null;
+            int foundIndex = -1;
 
-            RhythmNoteVisual noteToProcess = _activeNotes[0];
-            _activeNotes.RemoveAt(0);
+            for (int i = 0; i < _activeNotes.Count; i++)
+            {
+                // Compara se o carimbo de milissegundos bate com o enviado pelo motor rítmico
+                if (Mathf.Abs(_activeNotes[i].TargetTimestampMs - targetTimestampMs) < 1f)
+                {
+                    noteToProcess = _activeNotes[i];
+                    foundIndex = i;
+                    break;
+                }
+            }
 
-            int trackIndex = noteToProcess.AssociatedTrackIndex;
-            noteToProcess.transform.SetParent(transform, true);
+            // Se o clique foi fantasma ou spam fora do alvo, ignora e protege as notas correndo!
+            if (noteToProcess == null) return;
 
             if (result == NoteResult.Success)
             {
-                noteToProcess.PlayHitFeedback(null);
-
-                if (trackIndex >= 0 && trackIndex < trackLineRenderers.Length && trackLineRenderers[trackIndex] != null)
+                if (noteToProcess.IsHoldNote)
                 {
-                    LineRenderer activeLine = trackLineRenderers[trackIndex];
-                    DOTween.Kill(activeLine);
-                    activeLine.widthMultiplier = 0.4f;
-
-                    DOTween.To(() => activeLine.widthMultiplier, x => activeLine.widthMultiplier = x, 0.12f, 0.25f)
-                        .SetEase(Ease.OutQuad);
+                    // Trava a nota concêntrica imóvel no alvo para inflar
+                    noteToProcess.StartHoldCharging(() =>
+                    {
+                        // Remove apenas ao terminar o carregamento de 100% de escala
+                        _activeNotes.Remove(noteToProcess);
+                        _rhythmEngine.CompleteHoldActive();
+                    });
+                    return;
                 }
+
+                // Nota normal curta: explode instantaneamente e sai da lista
+                _activeNotes.RemoveAt(foundIndex);
+                noteToProcess.transform.SetParent(transform, true);
+                noteToProcess.PlayHitFeedback(null);
             }
             else
             {
+                // Miss por tempo ou soltura de Hold: murcha e sai da lista
+                _activeNotes.RemoveAt(foundIndex);
+                noteToProcess.transform.SetParent(transform, true);
                 noteToProcess.PlayMissFeedback(null);
             }
         }
@@ -181,55 +201,16 @@ namespace mil.UI
             foreach (var line in trackLineRenderers)
             {
                 if (line == null) continue;
-                DOTween.Kill(line);
-
-                if (!isVisible)
-                {
-                    // FADE OUT DO CONTAINER INTERNO
-                    DOTween.To(() => line.widthMultiplier, x => line.widthMultiplier = x, 0f, 0.5f)
-                        .SetEase(Ease.InQuad)
-                        .OnComplete(() =>
-                        {
-                            // Só desativa o container interno de pistas, o pai mestre continua vivo!
-                            tracksVisualContainer.SetActive(false);
-                        });
-
-                    Color startColor = line.startColor;
-                    Color endColor = line.endColor;
-                    DOTween.To(() => line.startColor.a, a =>
-                    {
-                        line.startColor = new Color(startColor.r, startColor.g, startColor.b, a);
-                        line.endColor = new Color(endColor.r, endColor.g, endColor.b, a);
-                    }, 0f, 0.4f).SetEase(Ease.InQuad);
-                }
-                else
-                {
-                    // FADE IN DO CONTAINER INTERNO
-                    tracksVisualContainer.SetActive(true);
-                    line.widthMultiplier = 0f;
-
-                    Color startColor = line.startColor;
-                    Color endColor = line.endColor;
-                    line.startColor = new Color(startColor.r, startColor.g, startColor.b, 0f);
-                    line.endColor = new Color(endColor.r, endColor.g, endColor.b, 0f);
-
-                    DOTween.To(() => line.widthMultiplier, x => line.widthMultiplier = x, 0.12f, 0.6f)
-                        .SetEase(Ease.OutBack);
-
-                    DOTween.To(() => line.startColor.a, a =>
-                    {
-                        line.startColor = new Color(startColor.r, startColor.g, startColor.b, a);
-                        line.endColor = new Color(endColor.r, endColor.g, endColor.b, a);
-                    }, 1f, 0.5f).SetEase(Ease.OutQuad);
-                }
+                tracksVisualContainer.SetActive(isVisible);
+                if (isVisible) line.widthMultiplier = 0.12f;
             }
         }
 
         private void OnDestroy()
         {
             if (_rhythmEngine == null) return;
-            _rhythmEngine.OnNoteSpawned -= SpawnNoteVisual;
-            _rhythmEngine.OnNoteProcessed -= ConsumeNoteVisual;
+            _rhythmEngine.OnNoteSpawnedWithHoldData -= SpawnNoteVisual;
+            _rhythmEngine.OnNoteProcessedWithTimestamp -= ConsumeNoteVisualWithTimestamp;
             _rhythmEngine.OnTrackVisibilityChanged -= SetVisible;
 
             foreach (var note in _notePool)
