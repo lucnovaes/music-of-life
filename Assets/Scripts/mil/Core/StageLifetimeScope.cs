@@ -20,12 +20,20 @@ namespace mil.Core
 
         [Header("Curtain System UI")]
         [SerializeField] private CurtainController curtainController;
-        
+
         [Header("Rhythm Counter Component")]
         [SerializeField] private RhythmCounterVisual rhythmCounterVisual;
+        [Header("UI Error Counter Presenter")]
+        [SerializeField] private ErrorCounterPresenter errorCounterPresenter;
 
-        [Header("Test Data Asset (Apenas para testes isolados)")]
+        [Header("UI Pause Menu Component")]
+        [SerializeField] private PauseMenuPresenter pauseMenuPresenter;
+
+
+        [Header("Debug Settings")]
+        [SerializeField] private bool bypassProgressionOnFail;
         [SerializeField] private Episode testEpisodeManifest;
+
 
         protected override void Configure(IContainerBuilder builder)
         {
@@ -35,7 +43,6 @@ namespace mil.Core
                 return;
             }
 
-
             // 2. Registra os componentes físicos e prefabs da cena
             builder.RegisterComponentInNewPrefab(audioClockPrefab, Lifetime.Singleton).AsSelf();
             builder.RegisterComponent(stageContainer);
@@ -44,6 +51,8 @@ namespace mil.Core
             builder.RegisterComponent(rhythmStagePresenter);
             builder.RegisterComponent(curtainController);
             builder.RegisterComponent(rhythmCounterVisual);
+            builder.RegisterComponent(errorCounterPresenter);
+            builder.RegisterComponent(pauseMenuPresenter);
 
             // 4. CORREÇÃO: Registra o RhythmEngine e StageVisualController no loop nativo da Unity (ITickable)
             // Usando RegisterEntryPoint, o VContainer gerencia o Update automático de frame E libera a injeção no construtor!
@@ -62,8 +71,11 @@ namespace mil.Core
                 builder.RegisterInstance(mockSession);
             }
 
-            // Registra o ponto de entrada mestre do fluxo do palco
-            builder.RegisterEntryPoint<StageController>();
+
+            builder.RegisterEntryPoint<StageController>(Lifetime.Singleton)
+                .WithParameter(bypassProgressionOnFail);
+
+
         }
     }
 }

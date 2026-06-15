@@ -19,6 +19,9 @@ namespace mil.UI
         [SerializeField] private RhythmNoteVisual notePrefab;
         [SerializeField] private int initialPoolSize = 25;
 
+        [Header("Sweet Spot Target Receptors (HUD)")]
+        [SerializeField] private SpriteRenderer[] trackReceptors;
+
         private AudioClock _audioClock;
         private RhythmEngine _rhythmEngine;
 
@@ -27,11 +30,25 @@ namespace mil.UI
 
         private const float LookAheadMs = 2500f;
 
+        private readonly List<Vector3> _receptorOriginalScales = new();
+
         public void Initialize(AudioClock audioClock, RhythmEngine rhythmEngine)
         {
             _audioClock = audioClock;
             _rhythmEngine = rhythmEngine;
             _activeNotes.Clear();
+
+            // GRAVAÇÃO DE CACHE DAS ESCALAS REAIS:
+            // Salva o tamanho exato de cada um dos 4 alvos configurados no Inspector
+            _receptorOriginalScales.Clear();
+            if (trackReceptors != null)
+            {
+                foreach (var receptor in trackReceptors)
+                {
+                    if (receptor != null) _receptorOriginalScales.Add(receptor.transform.localScale);
+                    else _receptorOriginalScales.Add(Vector3.one); // Fallback seguro
+                }
+            }
 
             if (trackSplines != null && trackLineRenderers != null)
             {
@@ -141,7 +158,6 @@ namespace mil.UI
 
             for (int i = 0; i < _activeNotes.Count; i++)
             {
-                // Compara se o carimbo de milissegundos bate com o enviado pelo motor rítmico
                 if (Mathf.Abs(_activeNotes[i].TargetTimestampMs - targetTimestampMs) < 1f)
                 {
                     noteToProcess = _activeNotes[i];
@@ -150,31 +166,43 @@ namespace mil.UI
                 }
             }
 
-            // Se o clique foi fantasma ou spam fora do alvo, ignora e protege as notas correndo!
             if (noteToProcess == null) return;
+
+            int trackIndex = noteToProcess.AssociatedTrackIndex;
+
+            // 🎸 COLA DO PULSO DO RECEPTOR CORRIGIDO:
+            if (trackReceptors != null && trackIndex >= 0 && trackIndex < trackReceptors.Length && trackReceptors[trackIndex] != null)
+            {
+                SpriteRenderer receptor = trackReceptors[trackIndex];
+                Vector3 baseScale = _receptorOriginalScales[trackIndex]; // Resgata o tamanho original exato da Unity!
+
+                receptor.transform.DOKill();
+
+                // Dá o tranco saltando para 1.3x do seu próprio tamanho personalizado
+                receptor.transform.localScale = baseScale * 1.3f;
+
+                // Retorna de forma elástica e rápida para a sua escala padrão de HUD
+                receptor.transform.DOScale(baseScale, 0.12f).SetEase(Ease.OutQuad);
+            }
 
             if (result == NoteResult.Success)
             {
                 if (noteToProcess.IsHoldNote)
                 {
-                    // Trava a nota concêntrica imóvel no alvo para inflar
                     noteToProcess.StartHoldCharging(() =>
                     {
-                        // Remove apenas ao terminar o carregamento de 100% de escala
                         _activeNotes.Remove(noteToProcess);
                         _rhythmEngine.CompleteHoldActive();
                     });
                     return;
                 }
 
-                // Nota normal curta: explode instantaneamente e sai da lista
                 _activeNotes.RemoveAt(foundIndex);
                 noteToProcess.transform.SetParent(transform, true);
                 noteToProcess.PlayHitFeedback(null);
             }
             else
             {
-                // Miss por tempo ou soltura de Hold: murcha e sai da lista
                 _activeNotes.RemoveAt(foundIndex);
                 noteToProcess.transform.SetParent(transform, true);
                 noteToProcess.PlayMissFeedback(null);

@@ -32,10 +32,15 @@ namespace mil.Core
         private readonly List<float> _activeNoteTimesOnScreenMs = new();
         private readonly List<int> _activeNoteTypesOnScreen = new();
 
-        private readonly bool[] _isButtonHeld = new bool[4];
         private float _currentHoldTargetTimeMs;
         private int _currentHoldTargetType;
         private bool _isHoldingActive;
+
+        private readonly bool[] _isButtonHeld = new bool[4];
+        private readonly MidiTrackParser.MidiNoteData[] _currentlyHeldNotesPerTrack = new MidiTrackParser.MidiNoteData[4];
+        private readonly bool[] _isTrackHoldingActive = new bool[4];
+
+        private const int MaxAllowedMisses = 3;
 
         // EXPANSÃO DO EVENTO: Repassa o Timestamp exato da nota processada para a UI não apagar a nota errada!
         public event Action<NoteResult, float> OnNoteProcessedWithTimestamp;
@@ -43,6 +48,13 @@ namespace mil.Core
         public event Action<bool> OnTrackVisibilityChanged;
         public event Action<float> OnMetronomeBeat;
         public event Action OnGameplayLoopStarted;
+
+        public event Action<int> OnMissPenaltyAccumulated;
+        private int _missCounter;
+
+        public event Action<float> OnSongFailedAndNeedsRewind;
+
+        public int GetLoopDurationMs() => _loopDurationMs;
 
         public RhythmEngine(AudioClock audioClock, InputHandler inputHandler)
         {
@@ -53,6 +65,7 @@ namespace mil.Core
         public void SetupTrack(MidiTrackParser.GeneratedTimelineData timelineData, int bpm, int loopDurationMs, int loopMeasurement)
         {
             var notes = timelineData.Notes;
+            _missCounter = 0;
             _timestampsMs = new float[notes.Length];
             _noteTypes = new int[notes.Length];
             _durationsMs = new float[notes.Length];
@@ -105,6 +118,7 @@ namespace mil.Core
 
             double currentAudioTimeMs = _audioClock.CurrentAudioTimeMs;
 
+            // FASE 1: PREPARAÇÃO
             if (!_isGameplayStarted)
             {
                 float timeRemainingInLoop = _loopDurationMs - (float)currentAudioTimeMs;
@@ -135,6 +149,7 @@ namespace mil.Core
                 return;
             }
 
+            // FASE 2: SPAWN DE GAMEPLAY ATIVA
             while (_nextNoteIndexToSpawn < _timestampsMs.Length &&
                    _timestampsMs[_nextNoteIndexToSpawn] - currentAudioTimeMs <= LookAheadMs)
             {
@@ -152,22 +167,34 @@ namespace mil.Core
                 _nextNoteIndexToSpawn++;
             }
 
-            if (_isHoldingActive)
+            // ➔ MONITORAMENTO DA COLA POLIFÔNICA DAS HOLD NOTES POR PISTA:
+            bool isAnyTrackFailing = false;
+            for (int t = 0; t < 4; t++)
             {
-                int targetTrack = _currentHoldTargetType >= 4 ? 0 : _currentHoldTargetType;
-                if (Input.GetKeyUp(KeyCode.D) || Input.GetKeyUp(KeyCode.F) || Input.GetKeyUp(KeyCode.J) || Input.GetKeyUp(KeyCode.K))
+                if (_isTrackHoldingActive[t])
                 {
-                    _isButtonHeld[targetTrack] = false;
-                }
+                    var note = _currentlyHeldNotesPerTrack[t];
+                    float endThresholdTime = note.TimestampMs + note.DurationMs;
 
-                if (!_isButtonHeld[targetTrack])
-                {
-                    _isHoldingActive = false;
-                    OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, _currentHoldTargetTimeMs);
+                    // Se o tempo da nota já estourou os 100% de duração do rastro, desativa com sucesso!
+                    if ((float)currentAudioTimeMs >= endThresholdTime)
+                    {
+                        _isTrackHoldingActive[t] = false;
+                        OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Success, note.TimestampMs);
+                    }
+                    // Se o jogador soltou a tecla antes do tempo acabar, marca falha na pista!
+                    else if (!_isButtonHeld[t])
+                    {
+                        _isTrackHoldingActive[t] = false;
+                        isAnyTrackFailing = true;
+                        OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, note.TimestampMs);
+                        RegisterMissPenalty();
+                        Debug.Log($"[Hold Polifônico] ❌ MISS: Soltou a pista {t} antes do tempo!");
+                    }
                 }
             }
 
-            // Miss Automático por estourar o tempo (Passou direto da linha de chegada)
+            // Miss Automático por tempo se a nota passou direto sem clique inicial
             while (_activeNoteTimesOnScreenMs.Count > 0 &&
                    currentAudioTimeMs - _activeNoteTimesOnScreenMs[0] > HitWindowMs)
             {
@@ -179,8 +206,18 @@ namespace mil.Core
 
                 if (!_isHoldingActive || _currentHoldTargetTimeMs != passedTime)
                 {
-                    var res = (passedNoteType == 5) ? NoteResult.Success : NoteResult.Miss;
-                    OnNoteProcessedWithTimestamp?.Invoke(res, passedTime);
+                    if (passedNoteType == 5)
+                    {
+                        OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Success, passedTime);
+                    }
+                    else
+                    {
+                        // Dispara o feedback para a HUD/Áudio
+                        OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, passedTime);
+
+                        // ✅ TRAVA DE DEPURACAO: Força o acúmulo físico de erro na variável mestre!
+                        RegisterMissPenalty();
+                    }
                 }
             }
         }
@@ -195,22 +232,20 @@ namespace mil.Core
             if (!_isEngineActive || !_isGameplayStarted || _activeNoteTimesOnScreenMs.Count == 0) return;
 
             double currentAudioTimeMs = _audioClock.CurrentAudioTimeMs;
-
-            // Procura se a primeira nota da fila está na janela de colisão universal legítima
             float targetNoteTimeMs = _activeNoteTimesOnScreenMs[0];
             int targetNoteType = _activeNoteTypesOnScreen[0];
 
             float timeDifferenceMs = Mathf.Abs((float)(currentAudioTimeMs - targetNoteTimeMs));
-
-            // SE APERTOU FORA DA JANELA, IGNORA O CLIQUE! Evita o bug de apagar notas no meio da Spline!
             if (timeDifferenceMs > HitWindowMs) return;
 
             _activeNoteTimesOnScreenMs.RemoveAt(0);
             _activeNoteTypesOnScreen.RemoveAt(0);
 
+            // CASO A: Jogador apertou uma Nota Errada / Obstáculo -> Sempre Miss
             if (targetNoteType == 5)
             {
                 OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, targetNoteTimeMs);
+                RegisterMissPenalty(); // ✅ TRAVA DE SEGURANÇA
                 return;
             }
 
@@ -218,27 +253,94 @@ namespace mil.Core
 
             if (isCorrectTrack)
             {
-                // Verifica se a nota disparada possui a propriedade Hold ativa na memória estática
                 int indexInMidi = Array.IndexOf(_timestampsMs, targetNoteTimeMs);
                 bool checkIsHold = (indexInMidi >= 0 && _isHoldNotes[indexInMidi]);
 
                 if (checkIsHold)
                 {
-                    _isHoldingActive = true;
-                    _currentHoldTargetTimeMs = targetNoteTimeMs;
-                    _currentHoldTargetType = targetNoteType;
+                    _isTrackHoldingActive[pressedTrackIndex] = true;
+                    _currentlyHeldNotesPerTrack[pressedTrackIndex] = new MidiTrackParser.MidiNoteData
+                    {
+                        TimestampMs = targetNoteTimeMs,
+                        DurationMs = _durationsMs[indexInMidi],
+                        NoteType = targetNoteType
+                    };
                 }
 
                 OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Success, targetNoteTimeMs);
             }
             else
             {
+                // CASO B: Jogador errou o botão ou a pista da nota normal -> Computa Miss
                 OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, targetNoteTimeMs);
+
+                // ✅ TRAVA DE SEGURANÇA: Registra o castigo imediatamente no frame do clique errado!
+                RegisterMissPenalty();
             }
         }
 
-        public void CompleteHoldActive() => _isHoldingActive = false; public void StopEngine() { if (!_isEngineActive) return; _isEngineActive = false; _isGameplayStarted = false; _isHoldingActive = false; _inputHandler.OnNoteTrack1 -= HandleTrack1Input; _inputHandler.OnNoteTrack2 -= HandleTrack2Input; _inputHandler.OnNoteTrack3 -= HandleTrack3Input; _inputHandler.OnNoteTrack4 -= HandleTrack4Input; _activeNoteTimesOnScreenMs.Clear(); _activeNoteTypesOnScreen.Clear(); _spawnedNotesInCurrentLoop.Clear(); }
-        public void ClearTimeline() { _activeNoteTimesOnScreenMs.Clear(); _activeNoteTypesOnScreen.Clear(); _spawnedNotesInCurrentLoop.Clear(); _timestampsMs = null; _noteTypes = null; _nextNoteIndexToSpawn = 0; _isGameplayStarted = false; _hasTriggeredPreparation = false; _isHoldingActive = false; }
+        public void CompleteHoldActive() => _isHoldingActive = false;
+        public void StopEngine()
+        {
+            if (!_isEngineActive) return;
+            _isEngineActive = false;
+            _isGameplayStarted = false;
+            _isHoldingActive = false;
+            _inputHandler.OnNoteTrack1 -= HandleTrack1Input;
+            _inputHandler.OnNoteTrack2 -= HandleTrack2Input;
+            _inputHandler.OnNoteTrack3 -= HandleTrack3Input;
+            _inputHandler.OnNoteTrack4 -= HandleTrack4Input;
+            _activeNoteTimesOnScreenMs.Clear();
+            _activeNoteTypesOnScreen.Clear();
+            _spawnedNotesInCurrentLoop.Clear();
+        }
+        public void ClearTimeline()
+        {
+            _activeNoteTimesOnScreenMs.Clear();
+            _activeNoteTypesOnScreen.Clear();
+            _spawnedNotesInCurrentLoop.Clear();
+            _timestampsMs = null;
+            _noteTypes = null;
+            _nextNoteIndexToSpawn = 0;
+            _isGameplayStarted = false;
+            _hasTriggeredPreparation = false;
+            _isHoldingActive = false;
+        }
         public void Dispose() => StopEngine();
+
+        private void RegisterMissPenalty()
+        {
+            if (!_isEngineActive || !_isGameplayStarted) return;
+
+            _missCounter++;
+
+            // ✅ DISPARA O PULSO DE HUD: Avisa a interface para apagar o Content correspondente na marra!
+            OnMissPenaltyAccumulated?.Invoke(_missCounter);
+
+            Debug.Log($"[Motor Punição] ❌ FALHA COMPUTADA! Erros acumulados: {_missCounter} de {MaxAllowedMisses}");
+
+            if (_missCounter >= MaxAllowedMisses)
+            {
+                _missCounter = 0;
+
+                float rewindPositionTargetMs = _loopDurationMs - (_msPerMeasure * 2f) - LookAheadMs;
+                if (rewindPositionTargetMs < 0f) rewindPositionTargetMs = 0f;
+
+                OnSongFailedAndNeedsRewind?.Invoke(rewindPositionTargetMs);
+            }
+        }
+
+        public void ResetEngineForRewind()
+        {
+            _activeNoteTimesOnScreenMs.Clear();
+            _activeNoteTypesOnScreen.Clear();
+            _spawnedNotesInCurrentLoop.Clear(); // Permite que as notas do MIDI nasçam de novo no loop!
+            _nextNoteIndexToSpawn = 0; // Reseta o ponteiro de leitura do arquivo binário
+            _isHoldingActive = false;
+            Array.Clear(_isButtonHeld, 0, _isButtonHeld.Length);
+
+            // Força as pistas a sumirem instantaneamente para brotarem de forma suave na nova contagem
+            OnTrackVisibilityChanged?.Invoke(false);
+        }
     }
 }

@@ -3,6 +3,7 @@ using UnityEngine;
 using Cysharp.Threading.Tasks;
 using FMOD.Studio;
 using FMODUnity;
+using System.Collections.Generic;
 using mil.Model;
 using mil.Data;
 using mil.UI;
@@ -20,55 +21,161 @@ namespace mil.Core
         private readonly RhythmStagePresenter _rhythmStagePresenter;
         private readonly CurtainController _curtainController;
         private readonly RhythmCounterVisual _rhythmCounterVisual;
+        private readonly ErrorCounterPresenter _errorCounterPresenter;
 
-        private GameObject _spawnedAnimationInstance;
-        private GameObject _spawnedSongLoopInstance;
+        private System.Threading.CancellationTokenSource _songLoopCancelTokenSource;
+
+        private readonly Dictionary<EpisodeAnimation, GameObject> _cachedAnimationInstances = new();
+        private readonly Dictionary<Song, GameObject> _cachedSongLoopInstances = new();
+        private readonly PauseMenuPresenter _pauseMenuPresenter;
+        private readonly InputHandler _inputHandler;
+        private bool _isGamePaused;
+
+
+        private GameObject _currentActiveVisualInstance;
 
         private EventInstance _mainAudioInstance;
         private EventInstance _textureAudioInstance;
         private EventInstance _soundtrackAudioInstance;
-
-        // AGORA É UMA INSTÂNCIA ÚNICA: Base e Solo rodam juntos no mesmo evento!
         private EventInstance _songAudioInstance;
+
+        private readonly bool _bypassProgressionOnFail;
 
         public StageController(
             AudioClock audioClock,
             StageSessionModel stageSession,
             Transform stageContainer,
             StageVisualController visualController,
-            StageLifetimeScope lifetimeScope,
-            RhythmEngine rhythmEngine,
+            RhythmEngine rhythmEngine, // 👈 Removido o StageLifetimeScope daqui!
             RhythmStagePresenter rhythmStagePresenter,
             CurtainController curtainController,
-            RhythmCounterVisual rhythmCounterVisual)
+            RhythmCounterVisual rhythmCounterVisual,
+            ErrorCounterPresenter errorCounterPresenter,
+            bool bypassProgressionOnFail,
+            PauseMenuPresenter pauseMenuPresenter,
+            InputHandler inputHandler)
         {
             _audioClock = audioClock;
             _stageSession = stageSession;
             _stageContainer = stageContainer;
             _visualController = visualController;
-            _lifetimeScope = lifetimeScope;
             _rhythmEngine = rhythmEngine;
             _rhythmStagePresenter = rhythmStagePresenter;
             _curtainController = curtainController;
             _rhythmCounterVisual = rhythmCounterVisual;
+            _errorCounterPresenter = errorCounterPresenter;
+            _bypassProgressionOnFail = bypassProgressionOnFail;
+            _pauseMenuPresenter = pauseMenuPresenter;
+            _inputHandler = inputHandler;
         }
 
         public void Start()
         {
             var activeEpisode = _stageSession.ActiveEpisode;
             if (activeEpisode == null) return;
+
+            if (_pauseMenuPresenter != null)
+            {
+                _pauseMenuPresenter.SetupCallbacks(
+                    onResume: TogglePauseState,
+                    onExitChapter: HandleExitToMainMenuScene,
+                    onExitGame: HandleAbsoluteApplicationQuit
+                );
+            }
+
+            // TRAVA DE HARDWARE: Garante que o tempo lógico do C# comece voando
+            _isGamePaused = false;
+            Time.timeScale = 1f;
+
+            // ➔ ESCUTA REATIVA REAL: Vincula a tecla de Pausa (Cancel/Esc/Start)
+            _inputHandler.OnCancel -= OnPauseInputTriggered;
+            _inputHandler.OnCancel += OnPauseInputTriggered;
+
+            // ✅ CORREÇÃO DE INFRAESTRUTURA: Limpa as assinaturas direcionais usando os nomes REAIS do seu InputHandler!
+            _inputHandler.OnNavigateUp -= OnPauseNavigateUpTriggered;
+            _inputHandler.OnNavigateDown -= OnPauseNavigateDownTriggered;
+            _inputHandler.OnSelect -= OnPauseSubmitTriggered;
+
             ExecuteStageWorkflowAsync().Forget();
+        }
+
+
+        private void OnPauseInputTriggered() => TogglePauseState();
+
+        // Métodos direcionais isolados na classe (Só serão invocados quando a assinatura estiver ativa na pausa)
+        private void OnPauseNavigateUpTriggered() => _pauseMenuPresenter?.Navigate(-1);
+        private void OnPauseNavigateDownTriggered() => _pauseMenuPresenter?.Navigate(1);
+        private void OnPauseSubmitTriggered() => _pauseMenuPresenter?.SubmitSelection();
+
+        private void TogglePauseState()
+        {
+            _isGamePaused = !_isGamePaused;
+
+            if (_isGamePaused)
+            {
+                Time.timeScale = 0f; // Congela o movimento físico das notas na Spline
+                if (_pauseMenuPresenter != null) _pauseMenuPresenter.Show();
+
+                if (_songAudioInstance.isValid()) _songAudioInstance.setPaused(true);
+                if (_mainAudioInstance.isValid()) _mainAudioInstance.setPaused(true);
+
+                // ✅ ATIVAÇÃO DINÂMICA: Vincula as ações apenas com o menu de pausa aberto na tela!
+                _inputHandler.OnNavigateUp += OnPauseNavigateUpTriggered;
+                _inputHandler.OnNavigateDown += OnPauseNavigateDownTriggered;
+                _inputHandler.OnSelect += OnPauseSubmitTriggered;
+            }
+            else
+            {
+                Time.timeScale = 1f; // Devolve a velocidade e o andamento ao C#
+                if (_pauseMenuPresenter != null) _pauseMenuPresenter.Hide();
+
+                if (_songAudioInstance.isValid()) _songAudioInstance.setPaused(false);
+                if (_mainAudioInstance.isValid()) _mainAudioInstance.setPaused(false);
+
+                // ✅ DESATIVAÇÃO DINÂMICA: Desvincula para os cliques de gameplay não mexerem no menu escondido
+                _inputHandler.OnNavigateUp -= OnPauseNavigateUpTriggered;
+                _inputHandler.OnNavigateDown -= OnPauseNavigateDownTriggered;
+                _inputHandler.OnSelect -= OnPauseSubmitTriggered;
+            }
+        }
+
+        private void HandleExitToMainMenuScene()
+        {
+            // Limpa a segurança de tempo de escala antes de carregar a cena de menus
+            Time.timeScale = 1f;
+
+            // Para e limpa todos os loops de áudio ativos para não vazar som no menu
+            CleanActiveSongLoop();
+            CleanActiveBlockAudioOnly();
+
+            Debug.Log("[Pause Menu] ➔ Carregando cena de Main Menu...");
+            // Substitua pelo método oficial de transição de cenas do seu projeto (Ex: SceneManager.LoadScene("1_MainMenu"))
+            UnityEngine.SceneManagement.SceneManager.LoadScene("1_MainMenu");
+        }
+
+        private void HandleAbsoluteApplicationQuit()
+        {
+            Debug.Log("[Pause Menu] 🛑 Encerrando o aplicativo (Application.Quit).");
+            Application.Quit();
         }
 
         private async UniTaskVoid ExecuteStageWorkflowAsync()
         {
             if (_curtainController != null) await _curtainController.CloseCurtainAsync(0f);
 
+            // Instancia a introdução mestre em background no frame zero
             EpisodeAnimation masterIntro = _stageSession.ActiveEpisode.MesterIntroAnimationBlock;
+            if (masterIntro != null && masterIntro.Animation != null && _stageContainer != null)
+            {
+                var inst = Object.Instantiate(masterIntro.Animation, _stageContainer);
+                inst.SetActive(false);
+                _cachedAnimationInstances[masterIntro] = inst;
+            }
+
             if (masterIntro != null)
             {
                 if (_curtainController != null) _curtainController.OpenCurtainAsync(0.5f).Forget();
-                await PlayAnimationBlockAsync(masterIntro, "[Palco: Intro Mestre]", 120);
+                await PlayCachedAnimationBlockAsync(masterIntro, "[Palco: Intro Mestre]", 120);
             }
 
             await LoadActiveChapterAsync();
@@ -79,14 +186,52 @@ namespace mil.Core
             Chapter currentChapter = _stageSession.GetActiveChapter();
             if (currentChapter == null) return;
 
+            // Limpa o cache do capítulo anterior e faz o pre-load do novo bloco inteiro na memória RAM
+            ClearChapterVisualCache();
+            PreloadChapterAssets(currentChapter);
+
+            Debug.Log($"[StageController] Caching seco concluído com sucesso para o Capítulo: '{currentChapter.ChapterName}'");
+
             EpisodeAnimation chapterIntro = currentChapter.IntroAnimationBlock;
             if (chapterIntro != null)
             {
                 if (_curtainController != null) _curtainController.OpenCurtainAsync(0.5f).Forget();
-                await PlayAnimationBlockAsync(chapterIntro, $"[Palco: Intro Capítulo - {currentChapter.ChapterName}]", currentChapter.Bpm);
+                await PlayCachedAnimationBlockAsync(chapterIntro, $"[Palco: Intro Capítulo]", currentChapter.Bpm);
             }
 
             await PlayChapterSongsSequenceAsync(currentChapter);
+        }
+
+        private void PreloadChapterAssets(Chapter chapter)
+        {
+            if (_stageContainer == null) return;
+
+            // 1. Pré-carrega a animação de introdução do capítulo
+            if (chapter.IntroAnimationBlock != null && chapter.IntroAnimationBlock.Animation != null)
+            {
+                var inst = Object.Instantiate(chapter.IntroAnimationBlock.Animation, _stageContainer);
+                inst.SetActive(false);
+                _cachedAnimationInstances[chapter.IntroAnimationBlock] = inst;
+            }
+
+            // 2. Pré-carrega as animações de loop de todas as músicas da fase de uma só vez
+            foreach (var song in chapter.Songs)
+            {
+                if (song.BackgroundLoopAnimation != null)
+                {
+                    var inst = Object.Instantiate(song.BackgroundLoopAnimation, _stageContainer);
+                    inst.SetActive(false);
+                    _cachedSongLoopInstances[song] = inst;
+                }
+            }
+
+            // 3. Pré-carrega a animação de encerramento do capítulo
+            if (chapter.FinalAnimationBlock != null && chapter.FinalAnimationBlock.Animation != null)
+            {
+                var inst = Object.Instantiate(chapter.FinalAnimationBlock.Animation, _stageContainer);
+                inst.SetActive(false);
+                _cachedAnimationInstances[chapter.FinalAnimationBlock] = inst;
+            }
         }
 
         private async UniTask PlayChapterSongsSequenceAsync(Chapter chapter)
@@ -96,38 +241,46 @@ namespace mil.Core
                 Song currentSong = chapter.Songs[_stageSession.CurrentSongIndex];
                 bool isLastSong = _stageSession.CurrentSongIndex == chapter.Songs.Length - 1;
 
-                await PlaySongGameLoopAsync(currentSong, chapter.Bpm, chapter.ShaderType, isLastSong);
+                // ➔ TRAVA DE VITÓRIA HISTÓRICA:
+                // O C# agora aguarda o veredito booleano do game loop da música.
+                bool survivedCleanly = await PlaySongGameLoopAsync(currentSong, chapter.Bpm, chapter.ShaderType, isLastSong);
 
-                _stageSession.AdvanceSong();
+                // Se o jogador sobreviveu e a música terminou sem rebobinar, avança para a próxima!
+                if (survivedCleanly)
+                {
+                    _stageSession.AdvanceSong();
+                    Debug.Log($"[Progresso Palco] ✨ Música concluída com sucesso! Avançando para o índice: {_stageSession.CurrentSongIndex}");
+                }
+                else
+                {
+                    // Se o retorno foi false (devido a falhas), o índice NÃO aumenta e o while força a mesma música a rodar de novo!
+                    Debug.LogWarning($"[Progresso Palco] 🛑 Loop de Tentativa Falhou! Mantendo o jogador na mesma música: '{currentSong.SongName}'");
+                }
             }
 
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.SetVisible(false);
 
             if (chapter.FinalAnimationBlock != null)
             {
-                await PlayAnimationBlockAsync(chapter.FinalAnimationBlock, $"[Palco: Final Capítulo - {chapter.ChapterName}]", chapter.Bpm);
+                await PlayCachedAnimationBlockAsync(chapter.FinalAnimationBlock, $"[Palco: Final Capítulo]", chapter.Bpm);
             }
 
             _stageSession.AdvanceChapter();
             await LoadActiveChapterAsync();
         }
 
-        private async UniTask PlaySongGameLoopAsync(Song song, int bpm, ShaderType shaderType, bool isLastSong)
+        private async UniTask<bool> PlaySongGameLoopAsync(Song song, int bpm, ShaderType shaderType, bool isLastSong)
         {
             if (_curtainController != null) await _curtainController.CloseCurtainAsync(0.4f);
 
-            if (_rhythmStagePresenter != null)
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.SetVisible(false);
+
+            if (_cachedSongLoopInstances.TryGetValue(song, out GameObject songVisualInstance))
             {
-                _rhythmStagePresenter.SetVisible(false);
+                SwitchActiveVisualInstance(songVisualInstance);
+                _visualController.LinkWithSpawnedInstance(songVisualInstance, shaderType, bpm);
             }
 
-            if (song.BackgroundLoopAnimation != null && _stageContainer != null)
-            {
-                _spawnedSongLoopInstance = Object.Instantiate(song.BackgroundLoopAnimation, _stageContainer);
-                _visualController.LinkWithSpawnedInstance(_spawnedSongLoopInstance, shaderType, bpm);
-            }
-
-            // 1. DISPARA O EVENTO MESTRE BASEADO NO MAIN AUDIO EVENT (Alinhado com a nova estrutura do Fmod!)
             int loopDurationMs = 0;
             if (!string.IsNullOrEmpty(song.MainAudioEvent))
             {
@@ -135,99 +288,195 @@ namespace mil.Core
                 _songAudioInstance.start();
                 _songAudioInstance.getDescription(out EventDescription desc);
                 desc.getLength(out loopDurationMs);
-
-                // CORREÇÃO DE HARDWARE: Muta rigorosamente a pista do solo (LeadMute = 1) no primeiro loop de introdução
                 _songAudioInstance.setParameterByName("LeadMute", 1.0f);
-                Debug.Log($"[FMOD Inicialização] Disparado evento único: {song.MainAudioEvent} | Duração: {loopDurationMs}ms");
-            }
-            else
-            {
-                Debug.LogError($"[StageController] Erro: O 'MainAudioEvent' da música '{song.SongName}' não está configurado!");
-                return;
             }
 
             _audioClock.SyncWithEvent(_songAudioInstance, bpm);
 
-            // Vinculação reativa de eventos da máquina de estados por frames
+            if (_errorCounterPresenter != null) _errorCounterPresenter.ResetAllCounters();
+
             _rhythmEngine.OnGameplayLoopStarted += HandleLeadAudioTurnOn;
-            _rhythmEngine.OnNoteProcessedWithTimestamp += EvaluateHoldAudioFeedback;
+            _rhythmEngine.OnNoteProcessedWithTimestamp += EvaluateInstrumentAudioFeedback;
             _rhythmEngine.OnMetronomeBeat += HandleMetronomeUIBeat;
+            _rhythmEngine.OnSongFailedAndNeedsRewind += HandleSongRewindSequence;
+            _rhythmEngine.OnMissPenaltyAccumulated += _errorCounterPresenter.UpdateMissVisual;
 
-            if (_rhythmStagePresenter != null)
-            {
-                _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
-            }
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
 
-            // Alimenta o motor rítmico com os carimbos de tempo extraídos do arquivo MIDI
+            // ➔ LEITURA SEGURA DO PARSER: Sem loops ocultos ou tarefas paralelas de cheat em background!
             if (!string.IsNullOrEmpty(song.MidiFileName))
             {
-                // O parser decodifica o arquivo e entrega a struct GeneratedTimelineData legítima!
                 var midiData = MidiTrackParser.ParseMidiFile(song.MidiFileName);
-
-                // CORREÇÃO DE INFRAESTRUTURA:
-                // Passamos a struct midiData inteira direta para o SetupTrack purificado do motor!
                 if (midiData.Notes != null && midiData.Notes.Length > 0)
                 {
-                    _rhythmEngine.SetupTrack(
-                        midiData,
-                        bpm,
-                        loopDurationMs,
-                        song.LoopMeasurement
-                    );
-                    Debug.Log($"[StageController] Motor alimentado com sucesso via Struct de Notas para '{song.SongName}'.");
-                }
-                else
-                {
-                    Debug.LogError($"[StageController] Falha Crítica: Nenhuma nota válida foi encontrada na struct do MIDI '{song.MidiFileName}'!");
+                    _rhythmEngine.SetupTrack(midiData, bpm, loopDurationMs, song.LoopMeasurement);
                 }
             }
 
-            // Retém a rodada ativa de jogabilidade na tela de forma segura
-            await UniTask.Delay(System.TimeSpan.FromSeconds(35.0));
+            bool isSongFinishedCleanly = false;
+            bool playerSurvivedTrack = true;
 
-            if (isLastSong && _curtainController != null) await _curtainController.OpenCurtainAsync(0.5f);
+            // LAÇO DE RETENÇÃO ASSÍNCRONO PURIFICADO E PROTEGIDO CONTRA CONGELAMENTO:
+            while (!isSongFinishedCleanly)
+            {
+                _songLoopCancelTokenSource = new System.Threading.CancellationTokenSource();
+                float totalGameplaySeconds = 35.0f;
+                float curtainCloseDurationSeconds = 0.6f;
 
+                try
+                {
+                    await UniTask.Delay(System.TimeSpan.FromSeconds(totalGameplaySeconds - curtainCloseDurationSeconds),
+                        cancellationToken: _songLoopCancelTokenSource.Token);
+
+                    if (_curtainController != null) await _curtainController.CloseCurtainAsync(curtainCloseDurationSeconds);
+
+                    isSongFinishedCleanly = true;
+                    playerSurvivedTrack = true;
+                }
+                catch (System.OperationCanceledException)
+                {
+                    if (_bypassProgressionOnFail)
+                    {
+                        isSongFinishedCleanly = true;
+                        playerSurvivedTrack = true;
+                        Debug.LogWarning("[DEBUG BYPASS] Progresso liberado via booleana!");
+                    }
+                    else
+                    {
+                        isSongFinishedCleanly = true;
+                        playerSurvivedTrack = false;
+                    }
+                }
+            }
+
+            _rhythmEngine.OnSongFailedAndNeedsRewind -= HandleSongRewindSequence;
             _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
             _rhythmEngine.OnGameplayLoopStarted -= HandleLeadAudioTurnOn;
-            _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateHoldAudioFeedback;
+            _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateInstrumentAudioFeedback;
             _rhythmEngine.StopEngine();
+
+            DeactivateCurrentActiveVisual();
             CleanActiveSongLoop();
+
+            return playerSurvivedTrack;
+        }
+        private void SwitchActiveVisualInstance(GameObject targetInstance)
+        {
+            if (_currentActiveVisualInstance != null && _currentActiveVisualInstance != targetInstance)
+            {
+                _currentActiveVisualInstance.SetActive(false);
+            }
+
+            _currentActiveVisualInstance = targetInstance;
+            if (_currentActiveVisualInstance != null)
+            {
+                _currentActiveVisualInstance.SetActive(true);
+            }
+        }
+
+        private void DeactivateCurrentActiveVisual()
+        {
+            if (_currentActiveVisualInstance != null)
+            {
+                _currentActiveVisualInstance.SetActive(false); _currentActiveVisualInstance = null;
+            }
+        }
+        private async UniTask PlayCachedAnimationBlockAsync(EpisodeAnimation animationBlock, string debugTag, int bpm)
+        {
+            if (_cachedAnimationInstances.TryGetValue(animationBlock, out GameObject animInstance))
+            {
+                SwitchActiveVisualInstance(animInstance);
+                Chapter currentChapter = _stageSession.GetActiveChapter();
+                if (currentChapter != null)
+                {
+                    _visualController.LinkWithSpawnedInstance(animInstance, currentChapter.ShaderType, bpm);
+                }
+            }
+
+            if (_curtainController != null)
+            {
+                _curtainController.OpenCurtainAsync(0.5f).Forget();
+            }
+
+            if (!string.IsNullOrEmpty(animationBlock.MainAudioEventPath))
+            { _mainAudioInstance = RuntimeManager.CreateInstance(animationBlock.MainAudioEventPath); _mainAudioInstance.start(); }
+            if (!string.IsNullOrEmpty(animationBlock.TextureAudioEventPath))
+            { _textureAudioInstance = RuntimeManager.CreateInstance(animationBlock.TextureAudioEventPath); _textureAudioInstance.start(); }
+            if (!string.IsNullOrEmpty(animationBlock.SoundtrackAudioEventPath))
+            { _soundtrackAudioInstance = RuntimeManager.CreateInstance(animationBlock.SoundtrackAudioEventPath); _soundtrackAudioInstance.start(); }
+
+            var coreAudioInstance = _mainAudioInstance.isValid() ? _mainAudioInstance : _soundtrackAudioInstance;
+            _audioClock.SyncWithEvent(coreAudioInstance, bpm);
+
+            // ➔ AJUSTE DE FLUXO ANTI-GLITCH:
+            // Nós esperamos a duração da animação inteira rolar em tela aberta, MENOS o tempo de fechamento da cortina.
+            float animDurationSeconds = animationBlock.DurationSeconds;
+            float closeDurationSeconds = 0.5f;
+
+            await UniTask.Delay(System.TimeSpan.FromSeconds(animDurationSeconds - closeDurationSeconds));
+
+            if (_curtainController != null)
+            {
+                // ✅ CORREÇÃO CIRÚRGICA: Colocamos o 'await' na frente do fechamento da cortina!
+                // Isso congela o fluxo do C# por 0.5 segundos enquanto a máscara preta fecha no visor.
+                // As linhas de baixo de destruição e limpeza de assets SÓ vão rodar quando a tela estiver 100% escura!
+                await _curtainController.CloseCurtainAsync(closeDurationSeconds);
+            }
+
+            CleanActiveBlockAudioOnly();
+        }
+
+        private void CleanActiveBlockAudioOnly()
+        {
+            _audioClock.StopClock(); _visualController.ClearActiveShader();
+            DeactivateCurrentActiveVisual();
+            if (_mainAudioInstance.isValid())
+            {
+                _mainAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE);
+                _mainAudioInstance.release();
+            }
+            if (_textureAudioInstance.isValid())
+            {
+                _textureAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE);
+                _textureAudioInstance.release();
+            }
+            if (_soundtrackAudioInstance.isValid())
+            {
+                _soundtrackAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE);
+                _mainAudioInstance.release();
+            }
+        }
+        private void ClearChapterVisualCache()
+        {
+            DeactivateCurrentActiveVisual();
+            foreach (var kvp in _cachedAnimationInstances)
+                if (kvp.Value != null) Object.Destroy(kvp.Value);
+            foreach (var kvp in _cachedSongLoopInstances)
+                if (kvp.Value != null) Object.Destroy(kvp.Value);
+            _cachedAnimationInstances.Clear();
+            _cachedSongLoopInstances.Clear();
         }
 
         private void HandleMetronomeUIBeat(float beatDurationSeconds)
         {
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.PulseBeat(beatDurationSeconds);
         }
-
         private void HandleLeadAudioTurnOn()
         {
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
-
-            // ➔ LATÊNCIA ZERO ABSOLUTA REALIZADA:
-            // O Loop de introdução terminou e a agulha física do FMOD resetou para a largada.
-            // Abrimos a automação do parâmetro 'LeadMute' para 0. O solo entra cravado por hardware!
-            if (_songAudioInstance.isValid())
-            {
-                _songAudioInstance.setParameterByName("LeadMute", 0.0f);
-                Debug.Log("[FMOD Sincronia] ➔ Transição de loop concluída. Parâmetro LeadMute aberto para 0.0f!");
-            }
+            if (_songAudioInstance.isValid()) _songAudioInstance.setParameterByName("LeadMute", 0.0f);
         }
-
-        private void EvaluateHoldAudioFeedback(NoteResult result, float timestampMs)
+        private void EvaluateInstrumentAudioFeedback(NoteResult result, float timestampMs)
         {
             if (!_songAudioInstance.isValid()) return;
-            float targetVolume = (result == NoteResult.Success) ? 1.0f : 0.0f;
-            _songAudioInstance.setParameterByName("LeadMute", targetVolume == 1f ? 0f : 1f);
+            float parameterValue = (result == NoteResult.Success) ? 0.0f : 1.0f;
+            _songAudioInstance.setParameterByName("LeadMute", parameterValue);
         }
-
         private void CleanActiveSongLoop()
         {
             if (_rhythmEngine != null) _rhythmEngine.ClearTimeline();
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
-
-            if (_spawnedSongLoopInstance != null) Object.Destroy(_spawnedSongLoopInstance);
-
             if (_songAudioInstance.isValid())
             {
                 _songAudioInstance.stop(FMOD.Studio.STOP_MODE.ALLOWFADEOUT);
@@ -235,25 +484,65 @@ namespace mil.Core
             }
         }
 
-        private async UniTask PlayAnimationBlockAsync(EpisodeAnimation animationBlock, string debugTag, int bpm)
+        private void HandleSongRewindSequence(float targetTimelinePositionMs)
         {
-            if (animationBlock.Animation != null && _stageContainer != null)
+            if (!_songAudioInstance.isValid()) return;
+
+            if (_songLoopCancelTokenSource != null)
             {
-                _spawnedAnimationInstance = Object.Instantiate(animationBlock.Animation, _stageContainer);
+                _songLoopCancelTokenSource.Cancel();
+                _songLoopCancelTokenSource.Dispose();
+                _songLoopCancelTokenSource = null;
             }
-            Chapter currentChapter = _stageSession.GetActiveChapter(); if (currentChapter != null && _spawnedAnimationInstance != null) { _visualController.LinkWithSpawnedInstance(_spawnedAnimationInstance, currentChapter.ShaderType, bpm); }
-            if (!string.IsNullOrEmpty(animationBlock.MainAudioEventPath)) { _mainAudioInstance = RuntimeManager.CreateInstance(animationBlock.MainAudioEventPath); _mainAudioInstance.start(); }
-            if (!string.IsNullOrEmpty(animationBlock.TextureAudioEventPath)) { _textureAudioInstance = RuntimeManager.CreateInstance(animationBlock.TextureAudioEventPath); _textureAudioInstance.start(); }
-            if (!string.IsNullOrEmpty(animationBlock.SoundtrackAudioEventPath)) { _soundtrackAudioInstance = RuntimeManager.CreateInstance(animationBlock.SoundtrackAudioEventPath); _soundtrackAudioInstance.start(); }
-            var coreAudioInstance = _mainAudioInstance.isValid() ? _mainAudioInstance : _soundtrackAudioInstance; _audioClock.SyncWithEvent(coreAudioInstance, bpm); await UniTask.Delay(System.TimeSpan.FromSeconds(animationBlock.DurationSeconds)); CleanActiveBlockAssets();
+
+            int currentBpm = _audioClock.CurrentBpm;
+            float msPerBeat = 60000f / currentBpm;
+            float msPerMeasure = msPerBeat * 4f;
+            float lookAheadMs = 2500f;
+
+            float exactCounterTriggerMs = _rhythmEngine.GetLoopDurationMs() - msPerMeasure - lookAheadMs;
+            if (exactCounterTriggerMs < 0f) exactCounterTriggerMs = 0f;
+
+            if (_stageSession.ActiveEpisode != null)
+            {
+                FMODUnity.RuntimeManager.PlayOneShot("event:/TheTrials/Chapter1/SFX");
+            }
+
+            _songAudioInstance.setTimelinePosition((int)exactCounterTriggerMs);
+            _songAudioInstance.setParameterByName("LeadMute", 1.0f);
+
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
+            if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
+
+            // ✅ RETORNADO O FEEDBACK VISUAL:
+            // Faz os 3 marcadores darem o flash vermelho de impacto e renascerem pulando na HUD!
+            if (_errorCounterPresenter != null) _errorCounterPresenter.PlayGameOverFlashFeedback();
+
+            _rhythmEngine.ResetEngineForRewind();
         }
-        private void CleanActiveBlockAssets() { _audioClock.StopClock(); _visualController.ClearActiveShader(); if (_spawnedAnimationInstance != null) Object.Destroy(_spawnedAnimationInstance); if (_mainAudioInstance.isValid()) { _mainAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE); _mainAudioInstance.release(); } if (_textureAudioInstance.isValid()) { _textureAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE); _textureAudioInstance.release(); } if (_soundtrackAudioInstance.isValid()) { _soundtrackAudioInstance.stop(FMOD.Studio.STOP_MODE.IMMEDIATE); _mainAudioInstance.release(); } }
+
         public void Dispose()
         {
+            if (_inputHandler != null)
+            {
+                _inputHandler.OnCancel -= OnPauseInputTriggered;
+                _inputHandler.OnNavigateUp -= OnPauseNavigateUpTriggered;
+                _inputHandler.OnNavigateDown -= OnPauseNavigateDownTriggered;
+                _inputHandler.OnSelect -= OnPauseSubmitTriggered;
+            }
+
             _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
             _rhythmEngine.OnGameplayLoopStarted -= HandleLeadAudioTurnOn;
-            _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateHoldAudioFeedback;
-            _rhythmEngine.StopEngine(); CleanActiveBlockAssets(); CleanActiveSongLoop();
+            _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateInstrumentAudioFeedback;
+            if (_errorCounterPresenter != null)
+            {
+                _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
+
+            }
+            _rhythmEngine.StopEngine();
+            ClearChapterVisualCache();
+            CleanActiveBlockAudioOnly();
+            CleanActiveSongLoop();
         }
     }
 }

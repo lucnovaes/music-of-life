@@ -7,10 +7,11 @@ namespace mil.UI
     public sealed class CurtainController : MonoBehaviour
     {
         [Header("Components Anchor")]
-        [SerializeField] private RectTransform irisMaskTransform; // Arraste o GameObject IrisMask aqui
+        [SerializeField] private RectTransform irisMaskTransform;
 
-        private Vector3 _closedScale = new Vector3(30f, 30f, 30f);
-        private Vector3 _openedScale = Vector3.zero;// Escala gigante para revelar toda a tela 1080p
+        private Vector3 _closedScale = new Vector3(20f, 20f, 20f);
+        private Vector3 _openedScale = Vector3.zero;
+
 
         private void Awake()
         {
