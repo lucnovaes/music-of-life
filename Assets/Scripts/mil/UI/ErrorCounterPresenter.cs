@@ -54,13 +54,33 @@ namespace mil.UI
         /// </summary>
         public void ResetAllCounters()
         {
-            if (counterContents == null) return;
+            if (counterContents == null || counterContents.Length == 0) return;
 
+            // ➔ TRAVA ANTI-NULLREFERENCE (INICIALIZAÇÃO SOB DEMANDA):
+            // Se o StageController der o boot mais rápido que o Awake/Start da Unity,
+            // nós criamos o cache das escalas e cores na marra neste frame para impedir o Crash!
+            if (_originalScales == null || _originalScales.Length != counterContents.Length)
+            {
+                _originalScales = new Vector3[counterContents.Length];
+                if (counterContents[0] != null) _baseColor = counterContents[0].color;
+                else _baseColor = Color.white;
+
+                for (int i = 0; i < counterContents.Length; i++)
+                {
+                    if (counterContents[i] != null)
+                    {
+                        _originalScales[i] = counterContents[i].transform.localScale;
+                    }
+                }
+            }
+
+            // Executa o laço de animação com a certeza absoluta de que nada está nulo
             for (int i = 0; i < counterContents.Length; i++)
             {
                 if (counterContents[i] == null) continue;
 
                 SpriteRenderer content = counterContents[i];
+
                 content.transform.DOKill();
                 content.DOKill();
 
@@ -73,7 +93,6 @@ namespace mil.UI
                 content.DOFade(_baseColor.a, 0.3f).SetDelay(i * 0.05f);
             }
         }
-
         public void PlayGameOverFlashFeedback()
         {
             if (counterContents == null) return;

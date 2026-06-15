@@ -29,10 +29,12 @@ namespace mil.Core
         private readonly Dictionary<Song, GameObject> _cachedSongLoopInstances = new();
         private readonly PauseMenuPresenter _pauseMenuPresenter;
         private readonly InputHandler _inputHandler;
+        private readonly CelebrationPresenter _celebrationPresenter;
+
+
         private bool _isGamePaused;
-
-
         private GameObject _currentActiveVisualInstance;
+        private bool _isCelebratingVictory;
 
         private EventInstance _mainAudioInstance;
         private EventInstance _textureAudioInstance;
@@ -40,6 +42,8 @@ namespace mil.Core
         private EventInstance _songAudioInstance;
 
         private readonly bool _bypassProgressionOnFail;
+
+
 
         public StageController(
             AudioClock audioClock,
@@ -53,7 +57,8 @@ namespace mil.Core
             ErrorCounterPresenter errorCounterPresenter,
             bool bypassProgressionOnFail,
             PauseMenuPresenter pauseMenuPresenter,
-            InputHandler inputHandler)
+            InputHandler inputHandler,
+            CelebrationPresenter celebrationPresenter)
         {
             _audioClock = audioClock;
             _stageSession = stageSession;
@@ -67,6 +72,7 @@ namespace mil.Core
             _bypassProgressionOnFail = bypassProgressionOnFail;
             _pauseMenuPresenter = pauseMenuPresenter;
             _inputHandler = inputHandler;
+            _celebrationPresenter = celebrationPresenter;
         }
 
         public void Start()
@@ -91,7 +97,13 @@ namespace mil.Core
             _inputHandler.OnCancel -= OnPauseInputTriggered;
             _inputHandler.OnCancel += OnPauseInputTriggered;
 
-            // ✅ CORREÇÃO DE INFRAESTRUTURA: Limpa as assinaturas direcionais usando os nomes REAIS do seu InputHandler!
+            if (_errorCounterPresenter != null)
+            {
+                _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
+                _rhythmEngine.OnMissPenaltyAccumulated += _errorCounterPresenter.UpdateMissVisual;
+
+            }
+
             _inputHandler.OnNavigateUp -= OnPauseNavigateUpTriggered;
             _inputHandler.OnNavigateDown -= OnPauseNavigateDownTriggered;
             _inputHandler.OnSelect -= OnPauseSubmitTriggered;
@@ -288,22 +300,28 @@ namespace mil.Core
                 _songAudioInstance.start();
                 _songAudioInstance.getDescription(out EventDescription desc);
                 desc.getLength(out loopDurationMs);
-                _songAudioInstance.setParameterByName("LeadMute", 1.0f);
+                _songAudioInstance.setParameterByName("LeadMute", 0.0f);
             }
 
             _audioClock.SyncWithEvent(_songAudioInstance, bpm);
 
-            if (_errorCounterPresenter != null) _errorCounterPresenter.ResetAllCounters();
+            // Inicializa a flag de controle de celebração desativada
+            _isCelebratingVictory = false;
 
-            _rhythmEngine.OnGameplayLoopStarted += HandleLeadAudioTurnOn;
+            // Vinculação inicial reativa dos eventos
             _rhythmEngine.OnNoteProcessedWithTimestamp += EvaluateInstrumentAudioFeedback;
             _rhythmEngine.OnMetronomeBeat += HandleMetronomeUIBeat;
             _rhythmEngine.OnSongFailedAndNeedsRewind += HandleSongRewindSequence;
             _rhythmEngine.OnMissPenaltyAccumulated += _errorCounterPresenter.UpdateMissVisual;
 
-            if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
+            // ✅ NOVA ASSINATURA: Escuta o momento exato em que a partitura MIDI zera com sucesso!
+            _rhythmEngine.OnSongNotesCompletedSuccessfully += HandleSongNotesCompletedVictory;
 
-            // ➔ LEITURA SEGURA DO PARSER: Sem loops ocultos ou tarefas paralelas de cheat em background!
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
+            if (_errorCounterPresenter != null) _errorCounterPresenter.ResetAllCounters();
+
+            if (_celebrationPresenter != null) _celebrationPresenter.Hide();
+
             if (!string.IsNullOrEmpty(song.MidiFileName))
             {
                 var midiData = MidiTrackParser.ParseMidiFile(song.MidiFileName);
@@ -316,7 +334,6 @@ namespace mil.Core
             bool isSongFinishedCleanly = false;
             bool playerSurvivedTrack = true;
 
-            // LAÇO DE RETENÇÃO ASSÍNCRONO PURIFICADO E PROTEGIDO CONTRA CONGELAMENTO:
             while (!isSongFinishedCleanly)
             {
                 _songLoopCancelTokenSource = new System.Threading.CancellationTokenSource();
@@ -326,6 +343,7 @@ namespace mil.Core
                 try
                 {
                     await UniTask.Delay(System.TimeSpan.FromSeconds(totalGameplaySeconds - curtainCloseDurationSeconds),
+                        delayType: DelayType.Realtime,
                         cancellationToken: _songLoopCancelTokenSource.Token);
 
                     if (_curtainController != null) await _curtainController.CloseCurtainAsync(curtainCloseDurationSeconds);
@@ -339,7 +357,6 @@ namespace mil.Core
                     {
                         isSongFinishedCleanly = true;
                         playerSurvivedTrack = true;
-                        Debug.LogWarning("[DEBUG BYPASS] Progresso liberado via booleana!");
                     }
                     else
                     {
@@ -349,9 +366,11 @@ namespace mil.Core
                 }
             }
 
+            // Desassinaturas de segurança ao encerrar a faixa
+            _rhythmEngine.OnSongNotesCompletedSuccessfully -= HandleSongNotesCompletedVictory;
+            _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
             _rhythmEngine.OnSongFailedAndNeedsRewind -= HandleSongRewindSequence;
             _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
-            _rhythmEngine.OnGameplayLoopStarted -= HandleLeadAudioTurnOn;
             _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateInstrumentAudioFeedback;
             _rhythmEngine.StopEngine();
 
@@ -459,8 +478,18 @@ namespace mil.Core
 
         private void HandleMetronomeUIBeat(float beatDurationSeconds)
         {
-            if (_rhythmCounterVisual != null) _rhythmCounterVisual.PulseBeat(beatDurationSeconds);
+            // Se a música acabou com sucesso, o relógio do FMOD alimenta estritamente o novo painel de vitória!
+            if (_isCelebratingVictory)
+            {
+                if (_celebrationPresenter != null) _celebrationPresenter.Pulse(beatDurationSeconds);
+            }
+            else
+            {
+                // Se ainda está na gameplay/preparação normal, pulsa a contagem regressiva original
+                if (_rhythmCounterVisual != null) _rhythmCounterVisual.PulseBeat(beatDurationSeconds);
+            }
         }
+
         private void HandleLeadAudioTurnOn()
         {
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
@@ -477,17 +506,29 @@ namespace mil.Core
             if (_rhythmEngine != null) _rhythmEngine.ClearTimeline();
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
+
+            // ✅ CORREÇÃO DE CONTINUIDADE VISUAL:
+            // Apaga e esconde o painel de vitória do sucesso assim que a música é encerrada fisicamente!
+            // Isso garante que ele NUNCA vaze por cima das animações finais ou da troca de capítulos.
+            if (_celebrationPresenter != null)
+            {
+                _celebrationPresenter.Hide();
+            }
+
             if (_songAudioInstance.isValid())
             {
                 _songAudioInstance.stop(FMOD.Studio.STOP_MODE.ALLOWFADEOUT);
                 _songAudioInstance.release();
             }
         }
+        
+        private float _lastRewindTimeTime;
 
         private void HandleSongRewindSequence(float targetTimelinePositionMs)
         {
             if (!_songAudioInstance.isValid()) return;
 
+            // Cancela o temporizador assíncrono antigo da CPU para reiniciar o cronômetro
             if (_songLoopCancelTokenSource != null)
             {
                 _songLoopCancelTokenSource.Cancel();
@@ -495,30 +536,41 @@ namespace mil.Core
                 _songLoopCancelTokenSource = null;
             }
 
-            int currentBpm = _audioClock.CurrentBpm;
-            float msPerBeat = 60000f / currentBpm;
-            float msPerMeasure = msPerBeat * 4f;
-            float lookAheadMs = 2500f;
+            // Alvo de rebatimento seco para o início absoluto (tempo zero)
+            float exactCounterTriggerMs = 0f;
 
-            float exactCounterTriggerMs = _rhythmEngine.GetLoopDurationMs() - msPerMeasure - lookAheadMs;
-            if (exactCounterTriggerMs < 0f) exactCounterTriggerMs = 0f;
+            Debug.LogWarning($"[REBATIMENTO DE CABECEIRA] 🎸 3 Falhas! Rebobinando o FMOD direto para o início: {exactCounterTriggerMs}ms");
 
-            if (_stageSession.ActiveEpisode != null)
-            {
-                FMODUnity.RuntimeManager.PlayOneShot("event:/TheTrials/Chapter1/SFX");
-            }
+            // ➔ REMOVIDO: O PlayOneShot do SFX de animação foi totalmente extinto daqui!
+            // TODO: Quando tiver o áudio de derrota legítimo (ex: scratch ou corte analógico), insira aqui.
 
+            // Move a agulha de hardware do som de volta para o início (0) por hardware
             _songAudioInstance.setTimelinePosition((int)exactCounterTriggerMs);
-            _songAudioInstance.setParameterByName("LeadMute", 1.0f);
+            _songAudioInstance.setParameterByName("LeadMute", 0.0f); // Devolve o solo ativo para a nova tentativa
 
+            // Limpezas de HUD, Object Pools e re-boot elástico das 3 vidas
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
-
-            // ✅ RETORNADO O FEEDBACK VISUAL:
-            // Faz os 3 marcadores darem o flash vermelho de impacto e renascerem pulando na HUD!
+            if (_celebrationPresenter != null) _celebrationPresenter.Hide();
             if (_errorCounterPresenter != null) _errorCounterPresenter.PlayGameOverFlashFeedback();
 
             _rhythmEngine.ResetEngineForRewind();
+        }
+
+        private void HandleSongNotesCompletedVictory()
+        {
+            _isCelebratingVictory = true;
+
+            // 1. FAZ A LIMPEZA DAS VIDAS: Apaga o contador de erros do topo
+            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
+
+            // 2. APAGA O CONTADOR NORMAL: Garante que o círculo de contagem antiga suma da tela
+            if (_rhythmCounterVisual != null) _rhythmCounterVisual.gameObject.SetActive(false);
+
+            // 3. ENTRA O SHOW VISUAL: Acorda o apresentador exclusivo de vitória com o seu próprio design!
+            if (_celebrationPresenter != null) _celebrationPresenter.Show();
+
+            Debug.Log("[StageController] Transição concluída! Iniciando o pulso do CelebrationPresenter isolado.");
         }
 
         public void Dispose()
