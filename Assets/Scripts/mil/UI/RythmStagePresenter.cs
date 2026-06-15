@@ -32,6 +32,9 @@ namespace mil.UI
 
         private readonly List<Vector3> _receptorOriginalScales = new();
 
+        private Vector3[] _originalSplinePositions;
+        private bool _isSplineAnimationRunning;
+
         public void Initialize(AudioClock audioClock, RhythmEngine rhythmEngine)
         {
             _audioClock = audioClock;
@@ -222,17 +225,87 @@ namespace mil.UI
             _activeNotes.Clear();
         }
 
-        public void SetVisible(bool isVisible)
+        public void SetVisible(bool visible)
         {
-            if (trackLineRenderers == null || tracksVisualContainer == null) return;
+            gameObject.SetActive(true);
 
-            foreach (var line in trackLineRenderers)
+            if (trackSplines == null || trackSplines.Length == 0) return;
+
+            // Cache de posições originais de fábrica (Rigorosamente gravado no frame zero legítimo)
+            if (_originalSplinePositions == null || _originalSplinePositions.Length != trackSplines.Length)
             {
-                if (line == null) continue;
-                tracksVisualContainer.SetActive(isVisible);
-                if (isVisible) line.widthMultiplier = 0.12f;
+                _originalSplinePositions = new Vector3[trackSplines.Length];
+                for (int i = 0; i < trackSplines.Length; i++)
+                {
+                    if (trackSplines[i] != null) _originalSplinePositions[i] = trackSplines[i].transform.localPosition;
+                }
+            }
+
+            if (visible)
+            {
+                if (tracksVisualContainer != null)
+                {
+                    tracksVisualContainer.gameObject.SetActive(true);
+                }
+
+                for (int i = 0; i < trackSplines.Length; i++)
+                {
+                    if (trackSplines[i] == null) continue;
+
+                    Transform splineTx = trackSplines[i].transform;
+
+                    // ➔ 1. FORÇA COMPORTAMENTO LIMPO: Mata qualquer tween fantasma que ficou rodando em background
+                    splineTx.DOKill();
+                    trackSplines[i].gameObject.SetActive(true);
+
+                    // ➔ 2. ANCORAGEM RÍGIDA DE ENTRADA: 
+                    // Buscamos a posição de fábrica direto da memória RAM (targetPos) e aplicamos o recuo de -10f.
+                    // Isso anula COMPLETAMENTE qualquer valor torto ou acumulado que o transform tenha herdado!
+                    Vector3 targetPos = _originalSplinePositions[i];
+                    splineTx.localPosition = targetPos + new Vector3(0f, -10f, 0f);
+
+                    // Sobe deslizando de volta cravado para a sua coordenada original de design
+                    splineTx.DOLocalMove(targetPos, 0.45f)
+                        .SetEase(Ease.OutBack)
+                        .SetDelay(i * 0.1f);
+                }
+            }
+            else
+            {
+                int totalTracks = trackSplines.Length;
+                for (int i = 0; i < totalTracks; i++)
+                {
+                    if (trackSplines[i] == null) continue;
+
+                    Transform splineTx = trackSplines[i].transform;
+                    splineTx.DOKill();
+
+                    // Ancoragem rígida de saída para garantir que o mergulho calcule a descida partindo do lugar certo
+                    Vector3 basePos = _originalSplinePositions[i];
+                    Vector3 hidePos = basePos + new Vector3(0f, -10f, 0f);
+
+                    GameObject trackGo = trackSplines[i].gameObject;
+                    bool isLast = (i == totalTracks - 1);
+
+                    // Força a posição atual a ser a de fábrica antes de despencar, limpando glitches de drift visual
+                    splineTx.localPosition = basePos;
+
+                    splineTx.DOLocalMove(hidePos, 0.35f)
+                        .SetEase(Ease.InBack)
+                        .SetDelay(i * 0.1f)
+                        .OnComplete(() =>
+                        {
+                            trackGo.SetActive(false);
+
+                            if (isLast && tracksVisualContainer != null)
+                            {
+                                tracksVisualContainer.gameObject.SetActive(false);
+                            }
+                        });
+                }
             }
         }
+
 
         private void OnDestroy()
         {

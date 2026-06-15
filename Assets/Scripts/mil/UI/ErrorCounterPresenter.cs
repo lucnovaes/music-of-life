@@ -11,6 +11,8 @@ namespace mil.UI
         private Vector3[] _originalScales;
         private Color _baseColor;
 
+        private Vector3[] _originalCounterPositions;
+
         private void Awake()
         {
             if (counterContents == null || counterContents.Length == 0) return;
@@ -56,43 +58,82 @@ namespace mil.UI
         {
             if (counterContents == null || counterContents.Length == 0) return;
 
-            // ➔ TRAVA ANTI-NULLREFERENCE (INICIALIZAÇÃO SOB DEMANDA):
-            // Se o StageController der o boot mais rápido que o Awake/Start da Unity,
-            // nós criamos o cache das escalas e cores na marra neste frame para impedir o Crash!
-            if (_originalScales == null || _originalScales.Length != counterContents.Length)
+            // Inicialização segura de posições em cache no frame zero
+            if (_originalCounterPositions == null || _originalCounterPositions.Length != counterContents.Length)
             {
+                _originalCounterPositions = new Vector3[counterContents.Length];
                 _originalScales = new Vector3[counterContents.Length];
-                if (counterContents[0] != null) _baseColor = counterContents[0].color;
-                else _baseColor = Color.white;
+                _baseColor = counterContents[0] != null ? counterContents[0].color : Color.white;
 
                 for (int i = 0; i < counterContents.Length; i++)
                 {
-                    if (counterContents[i] != null)
-                    {
-                        _originalScales[i] = counterContents[i].transform.localScale;
-                    }
+                    if (counterContents[i] == null) continue;
+                    _originalCounterPositions[i] = counterContents[i].transform.parent.localPosition; // Pega o pai (Counter1, 2, 3)
+                    _originalScales[i] = counterContents[i].transform.localScale;
                 }
             }
 
-            // Executa o laço de animação com a certeza absoluta de que nada está nulo
+            gameObject.SetActive(true); // Ativa a raiz do painel
+
             for (int i = 0; i < counterContents.Length; i++)
             {
                 if (counterContents[i] == null) continue;
 
+                Transform counterParentTx = counterContents[i].transform.parent;
                 SpriteRenderer content = counterContents[i];
 
+                counterParentTx.DOKill();
                 content.transform.DOKill();
                 content.DOKill();
 
-                // Força o estado zerado invisível antes do boot elástico
-                content.transform.localScale = Vector3.zero;
-                content.color = new Color(_baseColor.r, _baseColor.g, _baseColor.b, 0f);
+                // 1. Prepara o miolo cheio padrão
+                content.transform.localScale = _originalScales[i];
+                content.color = _baseColor;
 
-                // Efeito Estourado: Os marcadores brotam de volta pulando na tela!
-                content.transform.DOScale(_originalScales[i], 0.4f).SetEase(Ease.OutBack).SetDelay(i * 0.05f);
-                content.DOFade(_baseColor.a, 0.3f).SetDelay(i * 0.05f);
+                // 2. Esconde o bloco do contador acima do topo da tela (ex: sobe +5 no Y local)
+                Vector3 targetPos = _originalCounterPositions[i];
+                counterParentTx.localPosition = targetPos + new Vector3(0f, 5f, 0f);
+
+                // 3. Desce de cima para baixo com o tranco elástico de 0.1s em escada!
+                counterParentTx.DOLocalMove(targetPos, 0.4f)
+                    .SetEase(Ease.OutBack)
+                    .SetDelay(i * 0.1f);
             }
         }
+
+        /// <summary>
+        /// Método novo focado em retirar a HUD de vidas jogando-as de volta para o teto em escada.
+        /// Substitui o comando bruto de 'gameObject.SetActive(false)' dentro do StageController!
+        /// </summary>
+        public void HideWithCascadeAnimation()
+        {
+            if (counterContents == null) return;
+
+            int total = counterContents.Length;
+            for (int i = 0; i < total; i++)
+            {
+                if (counterContents[i] == null) continue;
+
+                Transform counterParentTx = counterContents[i].transform.parent;
+                counterParentTx.DOKill();
+
+                // Arremessa para cima do teto em escada (0.1s de delay por slot)
+                Vector3 hidePos = _originalCounterPositions[i] + new Vector3(0f, 5f, 0f);
+
+                GameObject rootGo = gameObject;
+                bool isLast = (i == total - 1);
+
+                counterParentTx.DOLocalMove(hidePos, 0.3f)
+                    .SetEase(Ease.InBack)
+                    .SetDelay(i * 0.1f)
+                    .OnComplete(() =>
+                    {
+                        // Só desliga a raiz do painel inteiro quando o ÚLTIMO coração sumir lá em cima
+                        if (isLast) rootGo.SetActive(false);
+                    });
+            }
+        }
+        
         public void PlayGameOverFlashFeedback()
         {
             if (counterContents == null) return;

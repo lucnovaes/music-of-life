@@ -521,7 +521,7 @@ namespace mil.Core
                 _songAudioInstance.release();
             }
         }
-        
+
         private float _lastRewindTimeTime;
 
         private void HandleSongRewindSequence(float targetTimelinePositionMs)
@@ -561,16 +561,17 @@ namespace mil.Core
         {
             _isCelebratingVictory = true;
 
-            // 1. FAZ A LIMPEZA DAS VIDAS: Apaga o contador de erros do topo
-            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
+            // ➔ ANIMAÇÃO DE SAÍDA COREOGRAFADA DAS VIDAS:
+            // Em vez de sumir do nada, elas sobem voando em direção ao teto uma por uma!
+            if (_errorCounterPresenter != null)
+            {
+                _errorCounterPresenter.HideWithCascadeAnimation();
+            }
 
-            // 2. APAGA O CONTADOR NORMAL: Garante que o círculo de contagem antiga suma da tela
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.gameObject.SetActive(false);
-
-            // 3. ENTRA O SHOW VISUAL: Acorda o apresentador exclusivo de vitória com o seu próprio design!
             if (_celebrationPresenter != null) _celebrationPresenter.Show();
 
-            Debug.Log("[StageController] Transição concluída! Iniciando o pulso do CelebrationPresenter isolado.");
+            Debug.Log("[StageController] HUD recolhida em cascata de hardware. Iniciando celebração!");
         }
 
         public void Dispose()
