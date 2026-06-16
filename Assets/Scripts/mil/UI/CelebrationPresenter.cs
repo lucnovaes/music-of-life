@@ -5,56 +5,57 @@ namespace mil.UI
 {
     public sealed class CelebrationPresenter : MonoBehaviour
     {
-        [Header("Visual Settings")]
-        [SerializeField] private SpriteRenderer celebrationIcon; // O sprite/círculo exclusivo do sucesso
+        [Header("Celebration Hierarchy")]
+        [SerializeField] private GameObject circleImageObject; // O objeto filho 'Circle'
 
-        private Vector3 _originalScale;
+        private const float MinScale = 0.8f;
+        private const float MaxScale = 1.0f;
 
         private void Awake()
         {
-            if (celebrationIcon == null) celebrationIcon = GetComponent<SpriteRenderer>();
-
-            if (celebrationIcon != null)
+            if (circleImageObject == null)
             {
-                _originalScale = celebrationIcon.transform.localScale;
+                Transform circleTx = transform.Find("Circle");
+                if (circleTx != null) circleImageObject = circleTx.gameObject;
             }
-            else
-            {
-                _originalScale = transform.localScale;
-            }
-
-            Hide(); // Garante que comece oculto em background
+            Hide();
         }
 
         public void Show()
         {
             gameObject.SetActive(true);
-            if (celebrationIcon != null)
+
+            if (circleImageObject != null)
             {
-                celebrationIcon.transform.DOKill();
-                celebrationIcon.transform.localScale = Vector3.zero;
-                // Surge dando um tranco elástico bonito na tela
-                celebrationIcon.transform.DOScale(_originalScale, 10f).SetEase(Ease.OutBack);
+                circleImageObject.SetActive(true);
+                circleImageObject.transform.DOKill();
+
+                // ✅ JANELA DE ESCALA ESTILIZADA: Nasce em 0.8 e salta elástico até 1.0!
+                circleImageObject.transform.localScale = Vector3.one * MinScale;
+                circleImageObject.transform.DOScale(Vector3.one * MaxScale, 0.4f).SetEase(Ease.OutBack);
             }
         }
 
         public void Hide()
         {
-            if (celebrationIcon != null) celebrationIcon.transform.DOKill();
+            if (circleImageObject != null)
+            {
+                circleImageObject.transform.DOKill();
+                circleImageObject.SetActive(false);
+            }
             gameObject.SetActive(false);
         }
 
-        /// <summary>
-        /// Pulsa ritmicamente cravado no BPM a cada batida do metrônomo.
-        /// </summary>
         public void Pulse(float beatDurationSeconds)
         {
-            Transform targetTransform = celebrationIcon != null ? celebrationIcon.transform : transform;
+            if (circleImageObject == null || !circleImageObject.activeSelf) return;
 
-            targetTransform.DOKill();
-            // Salta elástico para 1.35x do seu tamanho original de design e murcha no ritmo da música
-            targetTransform.localScale = _originalScale * 1.35f;
-            targetTransform.DOScale(_originalScale, beatDurationSeconds * 0.85f).SetEase(Ease.OutQuad);
+            Transform targetTx = circleImageObject.transform;
+            targetTx.DOKill();
+
+            // ✅ PULSO RÍTMICO BALANCED: Choteia saltando até 1.15x da escala mestre e murcha elástico até os 0.8 / 1.0 reais!
+            targetTx.localScale = Vector3.one * (MaxScale * 1.18f);
+            targetTx.DOScale(Vector3.one * MaxScale, beatDurationSeconds * 0.85f).SetEase(Ease.OutQuad);
         }
     }
 }

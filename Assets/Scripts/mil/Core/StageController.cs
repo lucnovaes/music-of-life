@@ -30,7 +30,7 @@ namespace mil.Core
         private readonly PauseMenuPresenter _pauseMenuPresenter;
         private readonly InputHandler _inputHandler;
         private readonly CelebrationPresenter _celebrationPresenter;
-
+        private readonly TrackSplinePresenter _trackSplinePresenter;
 
         private bool _isGamePaused;
         private GameObject _currentActiveVisualInstance;
@@ -58,7 +58,8 @@ namespace mil.Core
             bool bypassProgressionOnFail,
             PauseMenuPresenter pauseMenuPresenter,
             InputHandler inputHandler,
-            CelebrationPresenter celebrationPresenter)
+            CelebrationPresenter celebrationPresenter,
+            TrackSplinePresenter trackSplinePresenter)
         {
             _audioClock = audioClock;
             _stageSession = stageSession;
@@ -73,6 +74,7 @@ namespace mil.Core
             _pauseMenuPresenter = pauseMenuPresenter;
             _inputHandler = inputHandler;
             _celebrationPresenter = celebrationPresenter;
+            _trackSplinePresenter = trackSplinePresenter;
         }
 
         public void Start()
@@ -285,7 +287,7 @@ namespace mil.Core
         {
             if (_curtainController != null) await _curtainController.CloseCurtainAsync(0.4f);
 
-            if (_rhythmStagePresenter != null) _rhythmStagePresenter.SetVisible(false);
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.SetVisible(true);
 
             if (_cachedSongLoopInstances.TryGetValue(song, out GameObject songVisualInstance))
             {
@@ -305,21 +307,28 @@ namespace mil.Core
 
             _audioClock.SyncWithEvent(_songAudioInstance, bpm);
 
-            // Inicializa a flag de controle de celebração desativada
             _isCelebratingVictory = false;
 
-            // Vinculação inicial reativa dos eventos
+            SplineShape activeShape = SplineShape.Vertical;
+            Difficulty activeDifficulty = Difficulty.Hard;
+
+            if (_trackSplinePresenter != null)
+            {
+                _trackSplinePresenter.SetupChapterLayout(activeShape, activeDifficulty);
+                _trackSplinePresenter.SetCelebratingState(false); // Reseta a trava de sucesso no boot
+            }
+
+            // Assinaturas reativas limpas de eventos de hardware
             _rhythmEngine.OnNoteProcessedWithTimestamp += EvaluateInstrumentAudioFeedback;
             _rhythmEngine.OnMetronomeBeat += HandleMetronomeUIBeat;
             _rhythmEngine.OnSongFailedAndNeedsRewind += HandleSongRewindSequence;
             _rhythmEngine.OnMissPenaltyAccumulated += _errorCounterPresenter.UpdateMissVisual;
-
-            // ✅ NOVA ASSINATURA: Escuta o momento exato em que a partitura MIDI zera com sucesso!
             _rhythmEngine.OnSongNotesCompletedSuccessfully += HandleSongNotesCompletedVictory;
 
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
-            if (_errorCounterPresenter != null) _errorCounterPresenter.ResetAllCounters();
 
+            // Controle síncrono: O ErrorCounter nasce oculto em background, esperando as pistas darem a largada!
+            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
             if (_celebrationPresenter != null) _celebrationPresenter.Hide();
 
             if (!string.IsNullOrEmpty(song.MidiFileName))
@@ -342,6 +351,7 @@ namespace mil.Core
 
                 try
                 {
+                    // O laço segura a thread rodando em background até os 35 segundos fecharem
                     await UniTask.Delay(System.TimeSpan.FromSeconds(totalGameplaySeconds - curtainCloseDurationSeconds),
                         delayType: DelayType.Realtime,
                         cancellationToken: _songLoopCancelTokenSource.Token);
@@ -366,7 +376,12 @@ namespace mil.Core
                 }
             }
 
-            // Desassinaturas de segurança ao encerrar a faixa
+            // Limpeza de segurança mestre no blackout completo da cortina
+            _isCelebratingVictory = false;
+            if (_trackSplinePresenter != null) _trackSplinePresenter.SetCelebratingState(false);
+            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
+            if (_celebrationPresenter != null) _celebrationPresenter.Hide();
+
             _rhythmEngine.OnSongNotesCompletedSuccessfully -= HandleSongNotesCompletedVictory;
             _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
             _rhythmEngine.OnSongFailedAndNeedsRewind -= HandleSongRewindSequence;
@@ -379,6 +394,7 @@ namespace mil.Core
 
             return playerSurvivedTrack;
         }
+
         private void SwitchActiveVisualInstance(GameObject targetInstance)
         {
             if (_currentActiveVisualInstance != null && _currentActiveVisualInstance != targetInstance)
@@ -478,14 +494,18 @@ namespace mil.Core
 
         private void HandleMetronomeUIBeat(float beatDurationSeconds)
         {
-            // Se a música acabou com sucesso, o relógio do FMOD alimenta estritamente o novo painel de vitória!
             if (_isCelebratingVictory)
             {
                 if (_celebrationPresenter != null) _celebrationPresenter.Pulse(beatDurationSeconds);
             }
             else
             {
-                // Se ainda está na gameplay/preparação normal, pulsa a contagem regressiva original
+                // No momento em que as splines começam a inflar, o ErrorCounter desce do teto junto!
+                if (_errorCounterPresenter != null && !_errorCounterPresenter.gameObject.activeSelf)
+                {
+                    _errorCounterPresenter.ResetAllCounters();
+                }
+
                 if (_rhythmCounterVisual != null) _rhythmCounterVisual.PulseBeat(beatDurationSeconds);
             }
         }
@@ -528,7 +548,6 @@ namespace mil.Core
         {
             if (!_songAudioInstance.isValid()) return;
 
-            // Cancela o temporizador assíncrono antigo da CPU para reiniciar o cronômetro
             if (_songLoopCancelTokenSource != null)
             {
                 _songLoopCancelTokenSource.Cancel();
@@ -536,44 +555,71 @@ namespace mil.Core
                 _songLoopCancelTokenSource = null;
             }
 
-            // Alvo de rebatimento seco para o início absoluto (tempo zero)
             float exactCounterTriggerMs = 0f;
+            Debug.LogWarning($"[REBATIMENTO DE CABECEIRA] 3 Falhas! Voltando FMOD para o início.");
 
-            Debug.LogWarning($"[REBATIMENTO DE CABECEIRA] 🎸 3 Falhas! Rebobinando o FMOD direto para o início: {exactCounterTriggerMs}ms");
-
-            // ➔ REMOVIDO: O PlayOneShot do SFX de animação foi totalmente extinto daqui!
-            // TODO: Quando tiver o áudio de derrota legítimo (ex: scratch ou corte analógico), insira aqui.
-
-            // Move a agulha de hardware do som de volta para o início (0) por hardware
             _songAudioInstance.setTimelinePosition((int)exactCounterTriggerMs);
-            _songAudioInstance.setParameterByName("LeadMute", 0.0f); // Devolve o solo ativo para a nova tentativa
+            _songAudioInstance.setParameterByName("LeadMute", 0.0f);
 
-            // Limpezas de HUD, Object Pools e re-boot elástico das 3 vidas
+            // ✅ LIMPEZA DE SEGURANÇA E RE-BOOT DO RESET:
+            if (_celebrationPresenter != null) _celebrationPresenter.Hide(); // Esconde o círculo de comemoração
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
-            if (_celebrationPresenter != null) _celebrationPresenter.Hide();
-            if (_errorCounterPresenter != null) _errorCounterPresenter.PlayGameOverFlashFeedback();
+
+            // Força o acendimento elástico das 3 vidas de volta na HUD
+            if (_errorCounterPresenter != null) _errorCounterPresenter.ResetAllCounters();
 
             _rhythmEngine.ResetEngineForRewind();
         }
 
         private void HandleSongNotesCompletedVictory()
         {
-            _isCelebratingVictory = true;
-
-            // ➔ ANIMAÇÃO DE SAÍDA COREOGRAFADA DAS VIDAS:
-            // Em vez de sumir do nada, elas sobem voando em direção ao teto uma por uma!
-            if (_errorCounterPresenter != null)
-            {
-                _errorCounterPresenter.HideWithCascadeAnimation();
-            }
-
-            if (_rhythmCounterVisual != null) _rhythmCounterVisual.gameObject.SetActive(false);
-            if (_celebrationPresenter != null) _celebrationPresenter.Show();
-
-            Debug.Log("[StageController] HUD recolhida em cascata de hardware. Iniciando celebração!");
+            ExecuteSuccessCinemaSequenceAsync().Forget();
         }
 
+        private async UniTaskVoid ExecuteSuccessCinemaSequenceAsync()
+        {
+            // Bloqueia qualquer entrada fantasma do metrônomo mudando a flag global
+            _isCelebratingVictory = true;
+
+            Debug.Log("[StageController] 🎸 Partitura Concluída com Sucesso! Iniciando 1 segundo de respiro estático.");
+
+            // ➔ 1. O TIMING DE RETENÇÃO DE VITÓRIA (1 SEGUNDO DE TELA CHEIA ATIVA):
+            // O C# segura as splines e as vidas estáticas na tela por exatamente 1.0 segundo de tempo real de catarse acústica!
+            await UniTask.Delay(System.TimeSpan.FromSeconds(1.0f), delayType: DelayType.Realtime);
+
+            Debug.Log("[StageController] ➔ Executando ANIMATED OUT elástico síncrono da HUD e Splines!");
+
+            // ➔ 2. A COREOGRAFIA DE RETIRADA VISUAL VIA ANIMAÇÕES (ANIMATED OUT DE VERDADE):
+            // Ativamos a trava de segurança de comemoração nas pistas para não desligar os pais na hierarquia
+            if (_trackSplinePresenter != null)
+            {
+                _trackSplinePresenter.SetCelebratingState(true);
+                _trackSplinePresenter.SetSplinesVisible(false); // ✅ As splines individuais mergulham em escada para baixo!
+            }
+
+            if (_errorCounterPresenter != null)
+            {
+                _errorCounterPresenter.HideWithCascadeAnimation(); // ✅ As 3 vidas individuais sobem em escada voando para o teto!
+            }
+
+            if (_rhythmCounterVisual != null)
+            {
+                _rhythmCounterVisual.HideWithScaleAnimation(); // Círculo central murcha elástico
+            }
+
+            // Aguardamos as duas animações elásticas do DOTween limparem o visor da cena (0.45 segundos)
+            await UniTask.Delay(System.TimeSpan.FromSeconds(0.45f), delayType: DelayType.Realtime);
+
+            Debug.Log("[StageController] ➔ Palco limpo! Ativando o CelebrationPresenter Circle Feedback.");
+
+            // ➔ 3. ENTRA A CELEBRAÇÃO EXCLUSIVA:
+            // Com a tela 100% limpa de notas, pistas e vidas, o círculo de sucesso expande de 0.8 a 1.0 e passa a pulsar no BPM!
+            if (_celebrationPresenter != null)
+            {
+                _celebrationPresenter.Show();
+            }
+        }
         public void Dispose()
         {
             if (_inputHandler != null)

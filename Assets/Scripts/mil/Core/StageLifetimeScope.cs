@@ -30,6 +30,8 @@ namespace mil.Core
         [SerializeField] private PauseMenuPresenter pauseMenuPresenter;
         [Header("UI Celebration Component")]
         [SerializeField] private CelebrationPresenter celebrationPresenter;
+        [Header("UI Track Spline Presenter Component")]
+        [SerializeField] private TrackSplinePresenter trackSplinePresenter;
 
 
         [Header("Debug Settings")]
@@ -53,9 +55,11 @@ namespace mil.Core
             builder.RegisterComponent(rhythmStagePresenter);
             builder.RegisterComponent(curtainController);
             builder.RegisterComponent(rhythmCounterVisual);
-            builder.RegisterComponent(errorCounterPresenter);
             builder.RegisterComponent(pauseMenuPresenter);
             builder.RegisterComponent(celebrationPresenter);
+            builder.RegisterComponent(trackSplinePresenter);
+            builder.RegisterComponent(errorCounterPresenter);
+
 
             // 4. CORREÇÃO: Registra o RhythmEngine e StageVisualController no loop nativo da Unity (ITickable)
             // Usando RegisterEntryPoint, o VContainer gerencia o Update automático de frame E libera a injeção no construtor!

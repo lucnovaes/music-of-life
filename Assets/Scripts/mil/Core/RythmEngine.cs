@@ -234,32 +234,28 @@ namespace mil.Core
                     }
                 }
             }
-            
-            if (_isGameplayStarted && _nextNoteIndexToSpawn >= _timestampsMs.Length && _activeNoteTimesOnScreenMs.Count == 0)
+            bool allNotesSpawned = _nextNoteIndexToSpawn >= _timestampsMs.Length;
+            bool screenIsClearOfNotes = _activeNoteTimesOnScreenMs.Count == 0;
+
+            if (_isGameplayStarted && allNotesSpawned && screenIsClearOfNotes)
             {
-                // ... E se NENHUMA das 4 pistas de Hold Note estiver ativamente carregando o rastro neste frame!
                 bool isAnyHoldStillActive = false;
                 for (int t = 0; t < 4; t++)
                 {
-                    if (_isTrackHoldingActive[t])
-                    {
-                        isAnyHoldStillActive = true;
-                        break;
-                    }
+                    if (_isTrackHoldingActive[t]) { isAnyHoldStillActive = true; break; }
                 }
-
-                // Se o jogador ainda está preenchendo o rastro da última nota, o motor segura a onda e espera!
                 if (!isAnyHoldStillActive)
                 {
                     _isGameplayStarted = false;
 
-                    // Apaga as pistas visuais por hardware
-                    OnTrackVisibilityChanged?.Invoke(false);
+                    // ✅ O ANTÍDOTO DO LOOP: Desliga o motor rítmico IMEDIATAMENTE por hardware!
+                    // Isso impede que o método Tick() execute qualquer linha de código ou checagem 
+                    // no frame seguinte, matando o loop infinito de eventos na hora!
+                    _isEngineActive = false;
 
-                    // Dispara o pulso de vitória para o StageController ligar o CelebrationPresenter
-                    OnSongNotesCompletedSuccessfully?.Invoke();
+                    OnSongNotesCompletedSuccessfully?.Invoke(); // Dispara o pulso único legítimo
 
-                    Debug.Log("[Motor Ritmo] ✨ VITÓRIA ABSOLUTA! Todas as notas e rastros de Hold foram 100% concluídos.");
+                    Debug.LogWarning("[RhythmEngine] 🎯 Vitória selada de forma única! Motor rítmico desligado em background.");
                 }
             }
         }
@@ -390,5 +386,8 @@ namespace mil.Core
             // Força a HUD e as Splines a sumirem no escuro do reset, esperando os novos 2 compassos
             OnTrackVisibilityChanged?.Invoke(false);
         }
+
+        public bool IsGameplayStarted => _isGameplayStarted;
+        public bool IsEngineActive => _isEngineActive;
     }
 }

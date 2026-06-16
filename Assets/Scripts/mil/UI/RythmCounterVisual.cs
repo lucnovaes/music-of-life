@@ -55,5 +55,15 @@ namespace mil.UI
             }
             gameObject.SetActive(false);
         }
+
+        public void HideWithScaleAnimation()
+        {
+            transform.DOKill();
+
+            // Murcha elástico em direção ao centro em 0.25 segundos
+            transform.DOScale(Vector3.zero, 0.25f)
+                .SetEase(Ease.InBack)
+                .OnComplete(() => gameObject.SetActive(false));
+        }
     }
 }

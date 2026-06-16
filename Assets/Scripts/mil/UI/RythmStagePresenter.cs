@@ -2,38 +2,33 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Splines;
 using mil.Core;
-using DG.Tweening;
+using mil.Data;
 
 namespace mil.UI
 {
     public sealed class RhythmStagePresenter : MonoBehaviour
     {
-        [Header("Hierarchy Containers")]
-        [SerializeField] private GameObject tracksVisualContainer;
-
-        [Header("Spline Tracks (Mundo 3D)")]
-        [SerializeField] private SplineContainer[] trackSplines;
-        [SerializeField] private LineRenderer[] trackLineRenderers;
-
         [Header("Note Pooling Settings")]
         [SerializeField] private RhythmNoteVisual notePrefab;
         [SerializeField] private int initialPoolSize = 25;
 
-        [Header("Sweet Spot Target Receptors (HUD)")]
+        [Header("Sweet Spot Target Receptors (HUD Fixa)")]
         [SerializeField] private SpriteRenderer[] trackReceptors;
 
         private AudioClock _audioClock;
         private RhythmEngine _rhythmEngine;
+        private TrackSplinePresenter _trackSplinePresenter; 
 
         private readonly List<RhythmNoteVisual> _notePool = new();
         private readonly List<RhythmNoteVisual> _activeNotes = new();
 
         private const float LookAheadMs = 2500f;
 
-        private readonly List<Vector3> _receptorOriginalScales = new();
-
-        private Vector3[] _originalSplinePositions;
-        private bool _isSplineAnimationRunning;
+        [VContainer.Inject]
+        public void Construct(TrackSplinePresenter trackSplinePresenter)
+        {
+            _trackSplinePresenter = trackSplinePresenter;
+        }
 
         public void Initialize(AudioClock audioClock, RhythmEngine rhythmEngine)
         {
@@ -41,30 +36,15 @@ namespace mil.UI
             _rhythmEngine = rhythmEngine;
             _activeNotes.Clear();
 
-            // GRAVAÇÃO DE CACHE DAS ESCALAS REAIS:
-            // Salva o tamanho exato de cada um dos 4 alvos configurados no Inspector
-            _receptorOriginalScales.Clear();
-            if (trackReceptors != null)
+            SplineShape activeShape = SplineShape.Vertical;
+            Difficulty activeDifficulty = Difficulty.Hard;
+
+            if (_trackSplinePresenter != null)
             {
-                foreach (var receptor in trackReceptors)
-                {
-                    if (receptor != null) _receptorOriginalScales.Add(receptor.transform.localScale);
-                    else _receptorOriginalScales.Add(Vector3.one); // Fallback seguro
-                }
+                _trackSplinePresenter.SetupChapterLayout(activeShape, activeDifficulty);
             }
 
-            if (trackSplines != null && trackLineRenderers != null)
-            {
-                int tracksToBake = Mathf.Min(trackSplines.Length, trackLineRenderers.Length);
-                for (int i = 0; i < tracksToBake; i++)
-                {
-                    if (trackSplines[i] == null || trackLineRenderers[i] == null) continue;
-                    trackLineRenderers[i].useWorldSpace = false;
-                    BakeSplineToLineRenderer(trackSplines[i], trackLineRenderers[i]);
-                }
-            }
-
-            if (_notePool.Count == 0)
+            if (_notePool.Count == 0 && notePrefab != null)
             {
                 for (int i = 0; i < initialPoolSize; i++)
                 {
@@ -74,6 +54,9 @@ namespace mil.UI
                 }
             }
 
+            // ✅ ANULAÇÃO TOTAL DE DUPLICADOS DE EVENTO (ANTI-BUG DE ANIMAÇÃO DUPLA):
+            // Nós removemos RIGOROSAMENTE qualquer assinatura velha pendente nas instâncias do pool 
+            // antes de registrar as novas escutas, garantindo que a animação da Hold Note rode estritamente uma única vez!
             _rhythmEngine.OnNoteSpawnedWithHoldData -= SpawnNoteVisual;
             _rhythmEngine.OnNoteProcessedWithTimestamp -= ConsumeNoteVisualWithTimestamp;
             _rhythmEngine.OnTrackVisibilityChanged -= SetVisible;
@@ -83,63 +66,42 @@ namespace mil.UI
             _rhythmEngine.OnTrackVisibilityChanged += SetVisible;
         }
 
-        private void BakeSplineToLineRenderer(SplineContainer spline, LineRenderer lineRenderer)
-        {
-            lineRenderer.positionCount = 60;
-            for (int i = 0; i < 60; i++)
-            {
-                float t = i / 59f;
-                Vector3 localPos = spline.EvaluatePosition(t);
-                lineRenderer.SetPosition(i, localPos);
-            }
-        }
-
         private void Update()
         {
-            if (_audioClock == null || !_audioClock.IsPlaying || _activeNotes.Count == 0 || trackSplines == null) return;
+            if (_audioClock == null || !_audioClock.IsPlaying || _activeNotes.Count == 0 || _trackSplinePresenter == null) return;
 
             double currentAudioTimeMs = _audioClock.CurrentAudioTimeMs;
 
             for (int i = _activeNotes.Count - 1; i >= 0; i--)
             {
                 int trackIndex = _activeNotes[i].AssociatedTrackIndex;
-                if (trackIndex >= 0 && trackIndex < trackSplines.Length && trackSplines[trackIndex] != null)
+                SplineContainer spline = _trackSplinePresenter.GetSplineContainer(trackIndex);
+                if (spline != null)
                 {
-                    _activeNotes[i].UpdatePosition(currentAudioTimeMs, trackSplines[trackIndex], LookAheadMs);
+                    _activeNotes[i].UpdatePosition(currentAudioTimeMs, spline, LookAheadMs);
                 }
             }
         }
 
         private void SpawnNoteVisual(float targetTimestampMs, float durationMs, int noteType, bool isHoldNote)
         {
-            int targetTrackIndex;
+            if (_trackSplinePresenter == null) return;
+            int tracksCount = _trackSplinePresenter.GetActiveTracksCount();
+            if (tracksCount == 0) return;
 
-            if (noteType >= 4)
-            {
-                targetTrackIndex = UnityEngine.Random.Range(0, trackSplines.Length);
-            }
-            else
-            {
-                targetTrackIndex = Mathf.Clamp(noteType, 0, trackSplines.Length - 1);
-            }
+            int targetTrackIndex = (noteType >= 4) ? Random.Range(0, tracksCount) : Mathf.Clamp(noteType, 0, tracksCount - 1);
+
+            SplineContainer targetSpline = _trackSplinePresenter.GetSplineContainer(targetTrackIndex);
+            if (targetSpline == null) return;
 
             RhythmNoteVisual noteToSpawn = null;
-            foreach (var note in _notePool)
-            {
-                if (!note.IsActive)
-                {
-                    noteToSpawn = note;
-                    break;
-                }
-            }
+            foreach (var note in _notePool) if (!note.IsActive) { noteToSpawn = note; break; }
 
             if (noteToSpawn == null)
             {
                 noteToSpawn = Instantiate(notePrefab, transform);
                 _notePool.Add(noteToSpawn);
             }
-
-            SplineContainer targetSpline = trackSplines[targetTrackIndex];
 
             noteToSpawn.transform.SetParent(targetSpline.transform, false);
             noteToSpawn.transform.localScale = Vector3.one;
@@ -150,10 +112,6 @@ namespace mil.UI
             _activeNotes.Add(noteToSpawn);
         }
 
-        /// <summary>
-        /// PROTETOR DE INSTÂNCIA: Varre e localiza a nota exata correspondente ao Timestamp avaliado,
-        /// impedindo completamente o sumiço de notas no meio da pista!
-        /// </summary>
         private void ConsumeNoteVisualWithTimestamp(NoteResult result, float targetTimestampMs)
         {
             RhythmNoteVisual noteToProcess = null;
@@ -170,23 +128,9 @@ namespace mil.UI
             }
 
             if (noteToProcess == null) return;
-
             int trackIndex = noteToProcess.AssociatedTrackIndex;
 
-            // 🎸 COLA DO PULSO DO RECEPTOR CORRIGIDO:
-            if (trackReceptors != null && trackIndex >= 0 && trackIndex < trackReceptors.Length && trackReceptors[trackIndex] != null)
-            {
-                SpriteRenderer receptor = trackReceptors[trackIndex];
-                Vector3 baseScale = _receptorOriginalScales[trackIndex]; // Resgata o tamanho original exato da Unity!
-
-                receptor.transform.DOKill();
-
-                // Dá o tranco saltando para 1.3x do seu próprio tamanho personalizado
-                receptor.transform.localScale = baseScale * 1.3f;
-
-                // Retorna de forma elástica e rápida para a sua escala padrão de HUD
-                receptor.transform.DOScale(baseScale, 0.12f).SetEase(Ease.OutQuad);
-            }
+            if (_trackSplinePresenter != null) _trackSplinePresenter.PulseReceptor(trackIndex);
 
             if (result == NoteResult.Success)
             {
@@ -195,6 +139,7 @@ namespace mil.UI
                     noteToProcess.StartHoldCharging(() =>
                     {
                         _activeNotes.Remove(noteToProcess);
+                        noteToProcess.transform.SetParent(transform, true);
                         _rhythmEngine.CompleteHoldActive();
                     });
                     return;
@@ -227,85 +172,8 @@ namespace mil.UI
 
         public void SetVisible(bool visible)
         {
-            gameObject.SetActive(true);
-
-            if (trackSplines == null || trackSplines.Length == 0) return;
-
-            // Cache de posições originais de fábrica (Rigorosamente gravado no frame zero legítimo)
-            if (_originalSplinePositions == null || _originalSplinePositions.Length != trackSplines.Length)
-            {
-                _originalSplinePositions = new Vector3[trackSplines.Length];
-                for (int i = 0; i < trackSplines.Length; i++)
-                {
-                    if (trackSplines[i] != null) _originalSplinePositions[i] = trackSplines[i].transform.localPosition;
-                }
-            }
-
-            if (visible)
-            {
-                if (tracksVisualContainer != null)
-                {
-                    tracksVisualContainer.gameObject.SetActive(true);
-                }
-
-                for (int i = 0; i < trackSplines.Length; i++)
-                {
-                    if (trackSplines[i] == null) continue;
-
-                    Transform splineTx = trackSplines[i].transform;
-
-                    // ➔ 1. FORÇA COMPORTAMENTO LIMPO: Mata qualquer tween fantasma que ficou rodando em background
-                    splineTx.DOKill();
-                    trackSplines[i].gameObject.SetActive(true);
-
-                    // ➔ 2. ANCORAGEM RÍGIDA DE ENTRADA: 
-                    // Buscamos a posição de fábrica direto da memória RAM (targetPos) e aplicamos o recuo de -10f.
-                    // Isso anula COMPLETAMENTE qualquer valor torto ou acumulado que o transform tenha herdado!
-                    Vector3 targetPos = _originalSplinePositions[i];
-                    splineTx.localPosition = targetPos + new Vector3(0f, -10f, 0f);
-
-                    // Sobe deslizando de volta cravado para a sua coordenada original de design
-                    splineTx.DOLocalMove(targetPos, 0.45f)
-                        .SetEase(Ease.OutBack)
-                        .SetDelay(i * 0.1f);
-                }
-            }
-            else
-            {
-                int totalTracks = trackSplines.Length;
-                for (int i = 0; i < totalTracks; i++)
-                {
-                    if (trackSplines[i] == null) continue;
-
-                    Transform splineTx = trackSplines[i].transform;
-                    splineTx.DOKill();
-
-                    // Ancoragem rígida de saída para garantir que o mergulho calcule a descida partindo do lugar certo
-                    Vector3 basePos = _originalSplinePositions[i];
-                    Vector3 hidePos = basePos + new Vector3(0f, -10f, 0f);
-
-                    GameObject trackGo = trackSplines[i].gameObject;
-                    bool isLast = (i == totalTracks - 1);
-
-                    // Força a posição atual a ser a de fábrica antes de despencar, limpando glitches de drift visual
-                    splineTx.localPosition = basePos;
-
-                    splineTx.DOLocalMove(hidePos, 0.35f)
-                        .SetEase(Ease.InBack)
-                        .SetDelay(i * 0.1f)
-                        .OnComplete(() =>
-                        {
-                            trackGo.SetActive(false);
-
-                            if (isLast && tracksVisualContainer != null)
-                            {
-                                tracksVisualContainer.gameObject.SetActive(false);
-                            }
-                        });
-                }
-            }
+            if (_trackSplinePresenter != null) _trackSplinePresenter.SetSplinesVisible(visible);
         }
-
 
         private void OnDestroy()
         {
@@ -314,10 +182,7 @@ namespace mil.UI
             _rhythmEngine.OnNoteProcessedWithTimestamp -= ConsumeNoteVisualWithTimestamp;
             _rhythmEngine.OnTrackVisibilityChanged -= SetVisible;
 
-            foreach (var note in _notePool)
-            {
-                if (note != null) Destroy(note.gameObject);
-            }
+            foreach (var note in _notePool) if (note != null) Destroy(note.gameObject);
         }
     }
 }

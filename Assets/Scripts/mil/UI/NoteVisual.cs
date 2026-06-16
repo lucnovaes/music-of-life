@@ -29,9 +29,7 @@ namespace mil.UI
         public int NoteType => _noteType;
         public int AssociatedTrackIndex => _associatedTrackIndex;
         public bool IsActive => _isActive;
-        // Adicione esta propriedade pública logo acima do método Setup no seu RhythmNoteVisual.cs:
         public bool IsHoldNote => _isHoldNote;
-
 
         private void Awake()
         {
@@ -67,15 +65,20 @@ namespace mil.UI
 
             ApplyBasePaletteColor();
 
-            // ➔ TRAVA DE INICIALIZAÇÃO VISUAL:
-            // Garante com 100% de certeza que o miolo central nasça ENCOLHIDO (vazado) 
-            // no frame zero do spawn caso a nota seja carimbada como Hold Note pelo parser MIDI!
+            // Garante com 100% de certeza que o miolo central nasça ENCOLHIDO (vazado) no spawn
             if (centerCircle != null)
             {
                 centerCircle.transform.localScale = _isHoldNote ? _shrunkCenterScale : Vector3.one;
 
-                // Ativa um log rápido para você ver no console se o visual recebeu o comando
-                // Debug.Log($"[Visual Note] Nota aplicada. Tipo: {noteType} | IsHold: {_isHoldNote} | Escala Miolo: {centerCircle.transform.localScale}");
+                // Restaura a opacidade total para o miolo central ao sair do pool
+                Color cc = centerCircle.color;
+                centerCircle.color = new Color(cc.r, cc.g, cc.b, 1f);
+            }
+
+            if (backgroundOutline != null)
+            {
+                Color bo = backgroundOutline.color;
+                backgroundOutline.color = new Color(bo.r, bo.g, bo.b, 1f);
             }
         }
 
@@ -95,6 +98,7 @@ namespace mil.UI
             if (backgroundOutline != null) backgroundOutline.color = targetColor;
             if (centerCircle != null) centerCircle.color = targetColor;
         }
+
         public void StartHoldCharging(System.Action onComplete)
         {
             if (!_isActive || _isDying) return;
@@ -106,7 +110,8 @@ namespace mil.UI
         public void PlayHitFeedback(System.Action onComplete)
         {
             _isDying = true;
-            _isBeingHeld = false;
+            _isBeingHeld = false; // ✅ CORREÇÃO DE DESCLIQUE: Garante o corte da flag no frame do acerto!
+
             transform.DOScale(_originalScale * 2.2f, 0.15f).SetEase(Ease.OutExpo);
 
             if (backgroundOutline != null) backgroundOutline.DOFade(0f, 0.15f);
@@ -130,7 +135,8 @@ namespace mil.UI
         public void PlayMissFeedback(System.Action onComplete)
         {
             _isDying = true;
-            _isBeingHeld = false;
+            _isBeingHeld = false; // ✅ CORREÇÃO DE DESCLIQUE: Quando o apresentador chama o Miss por soltura precoce, desliga o holding na hora!
+
             transform.DOScale(Vector3.zero, 0.12f).SetEase(Ease.InBack);
 
             if (backgroundOutline != null) backgroundOutline.DOFade(0f, 0.12f);
@@ -151,9 +157,22 @@ namespace mil.UI
 
         public void Deactivate()
         {
+            // ✅ TRAVA DO OBJECT POOL: Mata animações pendentes ao desligar o objeto
+            transform.DOKill();
+            if (backgroundOutline != null) backgroundOutline.DOKill();
+            if (centerCircle != null) { centerCircle.DOKill(); centerCircle.transform.DOKill(); }
+
             _isActive = false;
             _isDying = false;
             _isBeingHeld = false;
+
+            // ✅ ANTI-DUPLICAÇÃO: Reseta rigorosamente o tamanho do miolo central para o padrão de pool!
+            // Isso impede que, ao reativar a nota na próxima música, ela nasça gigante herdando o lixo do lerp!
+            if (centerCircle != null)
+            {
+                centerCircle.transform.localScale = Vector3.one;
+            }
+
             gameObject.SetActive(false);
         }
 

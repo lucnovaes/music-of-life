@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 using DG.Tweening;
 
 namespace mil.UI
@@ -6,34 +7,59 @@ namespace mil.UI
     public sealed class ErrorCounterPresenter : MonoBehaviour
     {
         [Header("Visual Elements")]
-        [SerializeField] private SpriteRenderer[] counterContents; // Arraste os 3 'Content' aqui na ordem (1, 2, 3)
+        [SerializeField] private SpriteRenderer[] counterContents; // Os 3 'Fill' de vida
 
+        private Vector3[] _originalLocalPositions;
         private Vector3[] _originalScales;
         private Color _baseColor;
 
-        private Vector3[] _originalCounterPositions;
+        private const float HUDOffsetY = 5f; // Deslocamento do teto
 
-        private void Awake()
+        public void ResetAllCounters()
         {
             if (counterContents == null || counterContents.Length == 0) return;
 
-            // Cache seguro de escalas e cores de fábrica para evitar bugs de distorção
-            _originalScales = new Vector3[counterContents.Length];
-            _baseColor = counterContents[0].color;
+            gameObject.SetActive(true);
 
-            for (int i = 0; i < counterContents.Length; i++)
+            if (_originalLocalPositions == null || _originalLocalPositions.Length != counterContents.Length)
             {
-                if (counterContents[i] != null)
+                _originalLocalPositions = new Vector3[counterContents.Length];
+                _originalScales = new Vector3[counterContents.Length];
+
+                if (counterContents != null && counterContents.Length > 0) _baseColor = counterContents[0].color;
+                else _baseColor = Color.white;
+
+                for (int i = 0; i < counterContents.Length; i++)
                 {
+                    if (counterContents[i] == null) continue;
+                    _originalLocalPositions[i] = counterContents[i].transform.localPosition;
                     _originalScales[i] = counterContents[i].transform.localScale;
                 }
             }
+
+            for (int i = 0; i < counterContents.Length; i++)
+            {
+                if (counterContents[i] == null) continue;
+
+                Transform tx = counterContents[i].transform;
+                SpriteRenderer sr = counterContents[i];
+
+                tx.DOKill();
+                sr.DOKill();
+
+                sr.color = _baseColor;
+                tx.localScale = _originalScales[i];
+
+                // ANIMAÇÃO DE ENTRADA: Nasce recuado e desce elástico em escada!
+                Vector3 targetPos = _originalLocalPositions[i];
+                tx.localPosition = targetPos + new Vector3(0f, HUDOffsetY, 0f);
+
+                tx.DOLocalMove(targetPos, 0.45f)
+                    .SetEase(Ease.OutBack)
+                    .SetDelay(i * 0.1f);
+            }
         }
 
-        /// <summary>
-        /// Chamado reativamente toda vez que o jogador comete um erro. 
-        /// Esmaga o marcador correspondente de forma elástica até sumir!
-        /// </summary>
         public void UpdateMissVisual(int currentMissCount)
         {
             int index = currentMissCount - 1;
@@ -43,68 +69,13 @@ namespace mil.UI
             content.transform.DOKill();
             content.DOKill();
 
-            // Animação Chicotio: O miolo pisca em vermelho alerta, encolhe elástico e some!
             content.DOColor(Color.red, 0.05f).OnComplete(() =>
             {
-                content.transform.DOScale(Vector3.zero, 0.2f).SetEase(Ease.InBack);
-                content.DOFade(0f, 0.2f);
+                content.transform.DOScale(Vector3.zero, 0.18f).SetEase(Ease.InBack);
             });
         }
 
-        /// <summary>
-        /// Reseta os 3 marcadores de volta ao estado cheio com um efeito elástico e um flash rápido.
-        /// </summary>
-        public void ResetAllCounters()
-        {
-            if (counterContents == null || counterContents.Length == 0) return;
-
-            // Inicialização segura de posições em cache no frame zero
-            if (_originalCounterPositions == null || _originalCounterPositions.Length != counterContents.Length)
-            {
-                _originalCounterPositions = new Vector3[counterContents.Length];
-                _originalScales = new Vector3[counterContents.Length];
-                _baseColor = counterContents[0] != null ? counterContents[0].color : Color.white;
-
-                for (int i = 0; i < counterContents.Length; i++)
-                {
-                    if (counterContents[i] == null) continue;
-                    _originalCounterPositions[i] = counterContents[i].transform.parent.localPosition; // Pega o pai (Counter1, 2, 3)
-                    _originalScales[i] = counterContents[i].transform.localScale;
-                }
-            }
-
-            gameObject.SetActive(true); // Ativa a raiz do painel
-
-            for (int i = 0; i < counterContents.Length; i++)
-            {
-                if (counterContents[i] == null) continue;
-
-                Transform counterParentTx = counterContents[i].transform.parent;
-                SpriteRenderer content = counterContents[i];
-
-                counterParentTx.DOKill();
-                content.transform.DOKill();
-                content.DOKill();
-
-                // 1. Prepara o miolo cheio padrão
-                content.transform.localScale = _originalScales[i];
-                content.color = _baseColor;
-
-                // 2. Esconde o bloco do contador acima do topo da tela (ex: sobe +5 no Y local)
-                Vector3 targetPos = _originalCounterPositions[i];
-                counterParentTx.localPosition = targetPos + new Vector3(0f, 5f, 0f);
-
-                // 3. Desce de cima para baixo com o tranco elástico de 0.1s em escada!
-                counterParentTx.DOLocalMove(targetPos, 0.4f)
-                    .SetEase(Ease.OutBack)
-                    .SetDelay(i * 0.1f);
-            }
-        }
-
-        /// <summary>
-        /// Método novo focado em retirar a HUD de vidas jogando-as de volta para o teto em escada.
-        /// Substitui o comando bruto de 'gameObject.SetActive(false)' dentro do StageController!
-        /// </summary>
+        // ➔ ANIMAÇÃO DE SAÍDA DAS VIDAS EM CASCATA EM DIREÇÃO AO TETO (ANIMATED OUT ATIVA):
         public void HideWithCascadeAnimation()
         {
             if (counterContents == null) return;
@@ -114,53 +85,45 @@ namespace mil.UI
             {
                 if (counterContents[i] == null) continue;
 
-                Transform counterParentTx = counterContents[i].transform.parent;
-                counterParentTx.DOKill();
+                Transform tx = counterContents[i].transform;
+                tx.DOKill();
 
-                // Arremessa para cima do teto em escada (0.1s de delay por slot)
-                Vector3 hidePos = _originalCounterPositions[i] + new Vector3(0f, 5f, 0f);
-
+                Vector3 hidePos = _originalLocalPositions[i] + new Vector3(0f, HUDOffsetY, 0f);
                 GameObject rootGo = gameObject;
                 bool isLast = (i == total - 1);
 
-                counterParentTx.DOLocalMove(hidePos, 0.3f)
+                tx.localPosition = _originalLocalPositions[i];
+
+                tx.DOLocalMove(hidePos, 0.35f)
                     .SetEase(Ease.InBack)
                     .SetDelay(i * 0.1f)
                     .OnComplete(() =>
                     {
-                        // Só desliga a raiz do painel inteiro quando o ÚLTIMO coração sumir lá em cima
                         if (isLast) rootGo.SetActive(false);
                     });
             }
         }
-        
+
         public void PlayGameOverFlashFeedback()
         {
             if (counterContents == null) return;
 
-            // Para cada um dos 3 marcadores da HUD
             for (int i = 0; i < counterContents.Length; i++)
             {
                 if (counterContents[i] == null) continue;
 
-                SpriteRenderer content = counterContents[i];
-                content.transform.DOKill();
-                content.DOKill();
+                Transform tx = counterContents[i].transform;
+                SpriteRenderer sr = counterContents[i];
 
-                // Força o estado cheio gigante e vermelho de alerta instantaneamente no frame zero do reset
-                content.transform.localScale = _originalScales[i] * 2.2f; // Salta para mais do dobro do tamanho
-                content.color = Color.red;
-                content.gameObject.SetActive(true);
+                tx.DOKill();
+                sr.DOKill();
 
-                // Animação de Mola Inversa: Eles murcham tremendo até o tamanho correto de fábrica,
-                // limpando o vermelho e voltando para a cor branca original de HUD de forma elástica!
-                content.transform.DOScale(_originalScales[i], 0.4f)
-                    .SetEase(Ease.OutElastic)
-                    .SetDelay(i * 0.04f); // Pequeno atraso em escada (Cascata visual)
+                tx.localPosition = _originalLocalPositions[i];
+                tx.localScale = _originalScales[i] * 2.0f;
+                sr.color = Color.red;
 
-                content.DOColor(_baseColor, 0.35f)
-                    .SetEase(Ease.OutQuad)
-                    .SetDelay(i * 0.04f);
+                tx.DOScale(_originalScales[i], 0.4f).SetEase(Ease.OutElastic).SetDelay(i * 0.04f);
+                sr.DOColor(_baseColor, 0.35f).SetEase(Ease.OutQuad).SetDelay(i * 0.04f);
             }
         }
     }
