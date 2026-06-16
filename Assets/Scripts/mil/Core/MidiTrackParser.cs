@@ -147,9 +147,9 @@ namespace mil.Core
 
                             // Classificação de tipos por Velocity/Pitch original do GDD
                             int assignedType;
-                            if (startData.startVelocity >= 1 && startData.startVelocity <= 45)
+                            if ((pitch >= 124 && pitch <= 126 || startData.startVelocity >= 1 && startData.startVelocity <= 15) || (startData.startVelocity >= 1 && startData.startVelocity <= 45))
                             {
-                                assignedType = 4; // Ghost Note do Guitar Pro 8
+                                assignedType = 4; // DEAD Note do Guitar Pro 8
                             }
                             else
                             {
@@ -157,7 +157,8 @@ namespace mil.Core
                                 else
                                 {
                                     int pitchDelta = pitch - lastPitch;
-                                    if (pitchDelta == 0) assignedType = (UnityEngine.Random.Range(0, 100) < 15) ? 5 : UnityEngine.Random.Range(0, 4);
+                                    // Change 4 : UnityEngine.Random.Range(0, 4); to 5 : UnityEngine.Random.Range(0, 4); If we want implement WRONG NOTES
+                                    if (pitchDelta == 0) assignedType = (UnityEngine.Random.Range(0, 100) < 15) ? 4 : UnityEngine.Random.Range(0, 4);
                                     else if (pitchDelta > 0) assignedType = pitchDelta > 2 ? 3 : 2;
                                     else assignedType = pitchDelta < -2 ? 0 : 1;
                                 }

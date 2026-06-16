@@ -3,15 +3,17 @@ using UnityEngine.UI;
 using TMPro;
 using DG.Tweening;
 using mil.Data;
+using System.Linq;
 
 namespace mil.UI
 {
     public sealed class EpisodesPresenter : MonoBehaviour
     {
         [Header("UI Containers")]
-        [SerializeField] private Transform optionsContainer; 
-        [SerializeField] private TextMeshProUGUI textPrefab;    
+        [SerializeField] private Transform optionsContainer;
+        [SerializeField] private TextMeshProUGUI textPrefab;
         [SerializeField] private Image globalThumbnailDisplay;
+        [SerializeField] private EpisodeCatalog episodeCatalog;
 
         [Header("Glow & Animation")]
         [SerializeField] private float fadeDuration = 0.15f;
@@ -28,8 +30,10 @@ namespace mil.UI
 
         private static readonly int GlowPowerId = Shader.PropertyToID("_GlowPower");
 
-        public void BuildEpisodeList(Episode[] episodes, int defaultSelected)
+        public void BuildEpisodeList(int defaultSelected)
         {
+            var episodes = episodeCatalog.AllEpisodes;
+
             _cachedEpisodes = episodes;
             _episodeTexts = new TextMeshProUGUI[episodes.Length];
             _optionMaterials = new Material[episodes.Length];
@@ -40,20 +44,21 @@ namespace mil.UI
             for (int i = 0; i < episodes.Length; i++)
             {
                 var textInstance = Instantiate(textPrefab, optionsContainer);
+                textInstance.gameObject.SetActive(true);
                 textInstance.text = episodes[i].EpisodeTitle;
                 _episodeTexts[i] = textInstance;
-                
+
                 _optionMaterials[i] = new Material(textInstance.fontMaterial);
                 textInstance.fontMaterial = _optionMaterials[i];
-                
+
                 bool isSelected = (i == defaultSelected);
                 _optionMaterials[i].SetFloat(GlowPowerId, isSelected ? maxGlowPower : 0f);
                 textInstance.transform.localScale = isSelected ? Vector3.one * selectedScale : Vector3.one;
-                
+
                 Vector3 localPos = textInstance.transform.localPosition;
                 localPos.x = isSelected ? selectedIndentX : 0f;
                 textInstance.transform.localPosition = localPos;
-                
+
                 textInstance.ForceMeshUpdate();
             }
 
@@ -105,9 +110,21 @@ namespace mil.UI
 
         public void SetVisible(bool isVisible)
         {
+            BuildEpisodeList(0);
             gameObject.SetActive(isVisible);
         }
 
+        public Episode GetSelectedEpisode()
+        {
+            var episodes = episodeCatalog.AllEpisodes;
+            return episodes[0];
+        }
+
+        public int GetOptionsCount()
+        {
+            var episodes = episodeCatalog.AllEpisodes;
+            return episodes.Length;
+        }
         private void OnDestroy()
         {
             if (_optionMaterials == null) return;

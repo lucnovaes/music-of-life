@@ -26,7 +26,7 @@ namespace mil.UI
                 _originalLocalPositions = new Vector3[counterContents.Length];
                 _originalScales = new Vector3[counterContents.Length];
 
-                if (counterContents != null && counterContents.Length > 0) _baseColor = counterContents[0].color;
+                if (counterContents[0] != null) _baseColor = counterContents[0].color;
                 else _baseColor = Color.white;
 
                 for (int i = 0; i < counterContents.Length; i++)

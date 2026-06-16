@@ -8,8 +8,8 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: M_PsychodelicDream
-  m_Shader: {fileID: 4800000, guid: d0fc99f5a66217848840dc48fe33b677, type: 3}
-  m_Parent: {fileID: 0}
+  m_Shader: {fileID: 4800000, guid: 08b5b1ad5d408c24389e219f614d764d, type: 3}
+  m_Parent: {fileID: 2100000, guid: 903b88bf36ae6f14db8eeffa1747423b, type: 2}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
   m_InvalidKeywords: []
@@ -23,16 +23,14 @@ Material:
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
-    - _MainTex:
+    - _NoiseMap:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
     - _MusicBpmSpeed: 1
-    - _TimeParameter: 0
-    - _WaveAmplitude: 0.03
-    - _WaveFrequency: 6
+    - _NoiseScale: 4
     m_Colors: []
   m_BuildTextureStacks: []
   m_AllowLocking: 1

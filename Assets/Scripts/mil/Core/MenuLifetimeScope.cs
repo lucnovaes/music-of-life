@@ -8,6 +8,8 @@ namespace mil.Core
     public sealed class MenuLifetimeScope : LifetimeScope
     {
         [SerializeField] private MainMenuPresenter mainMenuPresenter;
+        [SerializeField] private EpisodesPresenter episodesPresenter;
+        [SerializeField] private DifficultyPresenter difficultyPresenter;
 
         protected override void Configure(IContainerBuilder builder)
         {
@@ -19,6 +21,9 @@ namespace mil.Core
             }
 
             builder.RegisterComponent(mainMenuPresenter);
+            builder.RegisterComponent(episodesPresenter);
+            builder.RegisterComponent(difficultyPresenter);
+
 
             builder.RegisterEntryPoint<MenuController>();
         }

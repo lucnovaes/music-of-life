@@ -31,6 +31,9 @@ namespace mil.Core
         private readonly InputHandler _inputHandler;
         private readonly CelebrationPresenter _celebrationPresenter;
         private readonly TrackSplinePresenter _trackSplinePresenter;
+        private readonly CreditsPresenter _creditsPresenter;
+
+        private readonly GameSettingsModel _gameSettings;
 
         private bool _isGamePaused;
         private GameObject _currentActiveVisualInstance;
@@ -44,13 +47,12 @@ namespace mil.Core
         private readonly bool _bypassProgressionOnFail;
 
 
-
         public StageController(
             AudioClock audioClock,
             StageSessionModel stageSession,
             Transform stageContainer,
             StageVisualController visualController,
-            RhythmEngine rhythmEngine, // 👈 Removido o StageLifetimeScope daqui!
+            RhythmEngine rhythmEngine,
             RhythmStagePresenter rhythmStagePresenter,
             CurtainController curtainController,
             RhythmCounterVisual rhythmCounterVisual,
@@ -59,10 +61,13 @@ namespace mil.Core
             PauseMenuPresenter pauseMenuPresenter,
             InputHandler inputHandler,
             CelebrationPresenter celebrationPresenter,
-            TrackSplinePresenter trackSplinePresenter)
+            TrackSplinePresenter trackSplinePresenter,
+            CreditsPresenter creditsPresenter,
+            GameSettingsModel gameSettings)
         {
             _audioClock = audioClock;
             _stageSession = stageSession;
+            _gameSettings = gameSettings;
             _stageContainer = stageContainer;
             _visualController = visualController;
             _rhythmEngine = rhythmEngine;
@@ -75,10 +80,28 @@ namespace mil.Core
             _inputHandler = inputHandler;
             _celebrationPresenter = celebrationPresenter;
             _trackSplinePresenter = trackSplinePresenter;
+            _creditsPresenter = creditsPresenter;
         }
 
         public void Start()
         {
+            if (_stageSession != null)
+            {
+                if (_stageSession.ActiveEpisode != null)
+                {
+                    Debug.Log("Starting Session" + _stageSession.ActiveEpisode.EpisodeTitle);
+                }
+                else
+                {
+                    Debug.Log("Active episode is null");
+
+                }
+            }
+            else
+            {
+                Debug.Log("Stage Session Model is null");
+            }
+
             var activeEpisode = _stageSession.ActiveEpisode;
             if (activeEpisode == null) return;
 
@@ -189,7 +212,7 @@ namespace mil.Core
             if (masterIntro != null)
             {
                 if (_curtainController != null) _curtainController.OpenCurtainAsync(0.5f).Forget();
-                await PlayCachedAnimationBlockAsync(masterIntro, "[Palco: Intro Mestre]", 120);
+                await PlayCachedAnimationBlockAsync(masterIntro, "[Stage: Intro Mestre]", 120);
             }
 
             await LoadActiveChapterAsync();
@@ -198,7 +221,11 @@ namespace mil.Core
         private async UniTask LoadActiveChapterAsync()
         {
             Chapter currentChapter = _stageSession.GetActiveChapter();
-            if (currentChapter == null) return;
+            if (currentChapter == null)
+            {
+                PlayFinalAnimation().Forget();
+                return;
+            }
 
             // Limpa o cache do capítulo anterior e faz o pre-load do novo bloco inteiro na memória RAM
             ClearChapterVisualCache();
@@ -210,10 +237,32 @@ namespace mil.Core
             if (chapterIntro != null)
             {
                 if (_curtainController != null) _curtainController.OpenCurtainAsync(0.5f).Forget();
-                await PlayCachedAnimationBlockAsync(chapterIntro, $"[Palco: Intro Capítulo]", currentChapter.Bpm);
+                await PlayCachedAnimationBlockAsync(chapterIntro, $"[Stage: Intro Capítulo]", currentChapter.Bpm);
             }
 
             await PlayChapterSongsSequenceAsync(currentChapter);
+        }
+
+        private async UniTaskVoid PlayFinalAnimation()
+        {
+            EpisodeAnimation finalAnimation = _stageSession.ActiveEpisode.MasterFinalAnimationBlock;
+            var inst = Object.Instantiate(finalAnimation.Animation, _stageContainer);
+            _cachedAnimationInstances[finalAnimation] = inst;
+            PlayCachedAnimationBlockAsync(finalAnimation, $"[Stage: Final Animation]", 100).Forget();
+
+            await UniTask.Delay(System.TimeSpan.FromSeconds(finalAnimation.DurationSeconds), DelayType.Realtime);
+
+            ShowCredits();
+        }
+
+        private void ShowCredits()
+        {
+            EpisodeAnimation creditsAnimation = _stageSession.ActiveEpisode.CreditsAnimationBlock;
+
+            var inst = Object.Instantiate(creditsAnimation.Animation, _stageContainer);
+            _cachedAnimationInstances[creditsAnimation] = inst;
+            PlayCachedAnimationBlockAsync(creditsAnimation, $"[Stage: Credits]", 100).Forget();
+            _creditsPresenter.gameObject.SetActive(true);
         }
 
         private void PreloadChapterAssets(Chapter chapter)
@@ -276,7 +325,7 @@ namespace mil.Core
 
             if (chapter.FinalAnimationBlock != null)
             {
-                await PlayCachedAnimationBlockAsync(chapter.FinalAnimationBlock, $"[Palco: Final Capítulo]", chapter.Bpm);
+                await PlayCachedAnimationBlockAsync(chapter.FinalAnimationBlock, $"[Stage: Final Capítulo]", chapter.Bpm);
             }
 
             _stageSession.AdvanceChapter();
@@ -285,9 +334,13 @@ namespace mil.Core
 
         private async UniTask<bool> PlaySongGameLoopAsync(Song song, int bpm, ShaderType shaderType, bool isLastSong)
         {
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
+
+            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
+
             if (_curtainController != null) await _curtainController.CloseCurtainAsync(0.4f);
 
-            if (_rhythmStagePresenter != null) _rhythmStagePresenter.SetVisible(true);
+            if (_rhythmStagePresenter != null) _rhythmStagePresenter.gameObject.SetActive(true);
 
             if (_cachedSongLoopInstances.TryGetValue(song, out GameObject songVisualInstance))
             {
@@ -327,8 +380,7 @@ namespace mil.Core
 
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
 
-            // Controle síncrono: O ErrorCounter nasce oculto em background, esperando as pistas darem a largada!
-            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
+            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false); // Nasce oculto esperando o boot
             if (_celebrationPresenter != null) _celebrationPresenter.Hide();
 
             if (!string.IsNullOrEmpty(song.MidiFileName))
@@ -336,7 +388,7 @@ namespace mil.Core
                 var midiData = MidiTrackParser.ParseMidiFile(song.MidiFileName);
                 if (midiData.Notes != null && midiData.Notes.Length > 0)
                 {
-                    _rhythmEngine.SetupTrack(midiData, bpm, loopDurationMs, song.LoopMeasurement);
+                    _rhythmEngine.SetupTrack(midiData, bpm, loopDurationMs, song.LoopMeasurement, _bypassProgressionOnFail);
                 }
             }
 
@@ -385,7 +437,6 @@ namespace mil.Core
             _rhythmEngine.OnSongNotesCompletedSuccessfully -= HandleSongNotesCompletedVictory;
             _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
             _rhythmEngine.OnSongFailedAndNeedsRewind -= HandleSongRewindSequence;
-            _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
             _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateInstrumentAudioFeedback;
             _rhythmEngine.StopEngine();
 
@@ -434,11 +485,22 @@ namespace mil.Core
             }
 
             if (!string.IsNullOrEmpty(animationBlock.MainAudioEventPath))
-            { _mainAudioInstance = RuntimeManager.CreateInstance(animationBlock.MainAudioEventPath); _mainAudioInstance.start(); }
+            {
+                _mainAudioInstance = RuntimeManager.CreateInstance(animationBlock.MainAudioEventPath);
+                _mainAudioInstance.start();
+            }
+
             if (!string.IsNullOrEmpty(animationBlock.TextureAudioEventPath))
-            { _textureAudioInstance = RuntimeManager.CreateInstance(animationBlock.TextureAudioEventPath); _textureAudioInstance.start(); }
+            {
+                _textureAudioInstance = RuntimeManager.CreateInstance(animationBlock.TextureAudioEventPath);
+                _textureAudioInstance.start();
+            }
+
             if (!string.IsNullOrEmpty(animationBlock.SoundtrackAudioEventPath))
-            { _soundtrackAudioInstance = RuntimeManager.CreateInstance(animationBlock.SoundtrackAudioEventPath); _soundtrackAudioInstance.start(); }
+            {
+                _soundtrackAudioInstance = RuntimeManager.CreateInstance(animationBlock.SoundtrackAudioEventPath);
+                _soundtrackAudioInstance.start();
+            }
 
             var coreAudioInstance = _mainAudioInstance.isValid() ? _mainAudioInstance : _soundtrackAudioInstance;
             _audioClock.SyncWithEvent(coreAudioInstance, bpm);
@@ -523,6 +585,17 @@ namespace mil.Core
         }
         private void CleanActiveSongLoop()
         {
+            if (_rhythmEngine != null)
+            {
+                _rhythmEngine.OnSongNotesCompletedSuccessfully -= HandleSongNotesCompletedVictory;
+                _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
+                _rhythmEngine.OnSongFailedAndNeedsRewind -= HandleSongRewindSequence;
+                _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat; // Desconecta o metrônomo no escuro
+                _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateInstrumentAudioFeedback;
+
+                _rhythmEngine.StopEngine(); // Desliga o motor rítmico de forma segura
+            }
+
             if (_rhythmEngine != null) _rhythmEngine.ClearTimeline();
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
@@ -541,8 +614,6 @@ namespace mil.Core
                 _songAudioInstance.release();
             }
         }
-
-        private float _lastRewindTimeTime;
 
         private void HandleSongRewindSequence(float targetTimelinePositionMs)
         {

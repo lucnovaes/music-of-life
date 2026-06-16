@@ -32,6 +32,8 @@ namespace mil.Core
         [SerializeField] private CelebrationPresenter celebrationPresenter;
         [Header("UI Track Spline Presenter Component")]
         [SerializeField] private TrackSplinePresenter trackSplinePresenter;
+        [Header("UI Credits Presenter Component")]
+        [SerializeField] private CreditsPresenter creditsPresenter;
 
 
         [Header("Debug Settings")]
@@ -59,7 +61,7 @@ namespace mil.Core
             builder.RegisterComponent(celebrationPresenter);
             builder.RegisterComponent(trackSplinePresenter);
             builder.RegisterComponent(errorCounterPresenter);
-
+            builder.RegisterComponent(creditsPresenter);
 
             // 4. CORREÇÃO: Registra o RhythmEngine e StageVisualController no loop nativo da Unity (ITickable)
             // Usando RegisterEntryPoint, o VContainer gerencia o Update automático de frame E libera a injeção no construtor!
@@ -74,15 +76,13 @@ namespace mil.Core
                 builder.Register<InputHandler>(Lifetime.Singleton).AsImplementedInterfaces().AsSelf();
 
                 var mockSession = new StageSessionModel();
-                if (testEpisodeManifest != null) mockSession.SetupSession(testEpisodeManifest);
+                if (testEpisodeManifest != null) mockSession.SetupSession(testEpisodeManifest, Difficulty.Hard);
                 builder.RegisterInstance(mockSession);
             }
 
 
             builder.RegisterEntryPoint<StageController>(Lifetime.Singleton)
                 .WithParameter(bypassProgressionOnFail);
-
-
         }
     }
 }

@@ -42,6 +42,7 @@ namespace mil.Core
 
         private float _firstNoteTimestampMs;
         private bool _hasTriggeredHudAppearance;
+        private bool _debugByPass;
 
 
         private const int MaxAllowedMisses = 3;
@@ -64,10 +65,13 @@ namespace mil.Core
         {
             _audioClock = audioClock;
             _inputHandler = inputHandler;
+
         }
 
-        public void SetupTrack(MidiTrackParser.GeneratedTimelineData timelineData, int bpm, int loopDurationMs, int loopMeasurement)
+        public void SetupTrack(MidiTrackParser.GeneratedTimelineData timelineData, int bpm, int loopDurationMs, int loopMeasurement, bool debugBypass = false)
         {
+            _debugByPass = debugBypass;
+            
             var notes = timelineData.Notes;
             _missCounter = 0;
             _timestampsMs = new float[notes.Length];
@@ -348,6 +352,8 @@ namespace mil.Core
 
         private void RegisterMissPenalty()
         {
+            if (_debugByPass) return;
+
             if (!_isEngineActive || !_isGameplayStarted) return;
 
             _missCounter++;

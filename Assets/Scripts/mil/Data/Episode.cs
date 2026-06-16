@@ -11,7 +11,7 @@ namespace mil.Data
         [SerializeField] private EpisodeAnimation mesterIntroAnimationBlock;
         [SerializeField] private EpisodeAnimation masterFinalAnimationBlock;
         [SerializeField] private Chapter[] chapters;
-        [SerializeField] private string[] creditNames; 
+        [SerializeField] private EpisodeAnimation creditsAnimationBlock;
 
         public string EpisodeTitle => episodeTitle;
         public Sprite ThumbnailImage => thumbnailImage;
@@ -19,6 +19,6 @@ namespace mil.Data
         public EpisodeAnimation MesterIntroAnimationBlock => mesterIntroAnimationBlock;
         public EpisodeAnimation MasterFinalAnimationBlock => masterFinalAnimationBlock;
         public Chapter[] Chapters => chapters;
-        public string[] CreditNames => creditNames;
+        public EpisodeAnimation CreditsAnimationBlock => creditsAnimationBlock;
     }
 }
