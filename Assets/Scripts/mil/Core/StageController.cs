@@ -14,6 +14,7 @@ namespace mil.Core
     {
         private readonly AudioClock _audioClock;
         private readonly StageSessionModel _stageSession;
+        private readonly SceneLoader _sceneLoader;
         private readonly Transform _stageContainer;
         private readonly StageVisualController _visualController;
         private readonly StageLifetimeScope _lifetimeScope;
@@ -50,6 +51,7 @@ namespace mil.Core
         public StageController(
             AudioClock audioClock,
             StageSessionModel stageSession,
+            SceneLoader sceneLoader,
             Transform stageContainer,
             StageVisualController visualController,
             RhythmEngine rhythmEngine,
@@ -67,6 +69,7 @@ namespace mil.Core
         {
             _audioClock = audioClock;
             _stageSession = stageSession;
+            _sceneLoader = sceneLoader;
             _gameSettings = gameSettings;
             _stageContainer = stageContainer;
             _visualController = visualController;
@@ -114,11 +117,9 @@ namespace mil.Core
                 );
             }
 
-            // TRAVA DE HARDWARE: Garante que o tempo lógico do C# comece voando
             _isGamePaused = false;
             Time.timeScale = 1f;
 
-            // ➔ ESCUTA REATIVA REAL: Vincula a tecla de Pausa (Cancel/Esc/Start)
             _inputHandler.OnCancel -= OnPauseInputTriggered;
             _inputHandler.OnCancel += OnPauseInputTriggered;
 
@@ -139,7 +140,6 @@ namespace mil.Core
 
         private void OnPauseInputTriggered() => TogglePauseState();
 
-        // Métodos direcionais isolados na classe (Só serão invocados quando a assinatura estiver ativa na pausa)
         private void OnPauseNavigateUpTriggered() => _pauseMenuPresenter?.Navigate(-1);
         private void OnPauseNavigateDownTriggered() => _pauseMenuPresenter?.Navigate(1);
         private void OnPauseSubmitTriggered() => _pauseMenuPresenter?.SubmitSelection();
@@ -150,26 +150,24 @@ namespace mil.Core
 
             if (_isGamePaused)
             {
-                Time.timeScale = 0f; // Congela o movimento físico das notas na Spline
+                Time.timeScale = 0f;
                 if (_pauseMenuPresenter != null) _pauseMenuPresenter.Show();
 
                 if (_songAudioInstance.isValid()) _songAudioInstance.setPaused(true);
                 if (_mainAudioInstance.isValid()) _mainAudioInstance.setPaused(true);
 
-                // ✅ ATIVAÇÃO DINÂMICA: Vincula as ações apenas com o menu de pausa aberto na tela!
                 _inputHandler.OnNavigateUp += OnPauseNavigateUpTriggered;
                 _inputHandler.OnNavigateDown += OnPauseNavigateDownTriggered;
                 _inputHandler.OnSelect += OnPauseSubmitTriggered;
             }
             else
             {
-                Time.timeScale = 1f; // Devolve a velocidade e o andamento ao C#
+                Time.timeScale = 1f;
                 if (_pauseMenuPresenter != null) _pauseMenuPresenter.Hide();
 
                 if (_songAudioInstance.isValid()) _songAudioInstance.setPaused(false);
                 if (_mainAudioInstance.isValid()) _mainAudioInstance.setPaused(false);
 
-                // ✅ DESATIVAÇÃO DINÂMICA: Desvincula para os cliques de gameplay não mexerem no menu escondido
                 _inputHandler.OnNavigateUp -= OnPauseNavigateUpTriggered;
                 _inputHandler.OnNavigateDown -= OnPauseNavigateDownTriggered;
                 _inputHandler.OnSelect -= OnPauseSubmitTriggered;
@@ -178,21 +176,16 @@ namespace mil.Core
 
         private void HandleExitToMainMenuScene()
         {
-            // Limpa a segurança de tempo de escala antes de carregar a cena de menus
             Time.timeScale = 1f;
 
-            // Para e limpa todos os loops de áudio ativos para não vazar som no menu
             CleanActiveSongLoop();
             CleanActiveBlockAudioOnly();
 
-            Debug.Log("[Pause Menu] ➔ Carregando cena de Main Menu...");
-            // Substitua pelo método oficial de transição de cenas do seu projeto (Ex: SceneManager.LoadScene("1_MainMenu"))
-            UnityEngine.SceneManagement.SceneManager.LoadScene("1_MainMenu");
+            _sceneLoader.LoadSceneAsync(GameScene.MainMenu).Forget();
         }
 
         private void HandleAbsoluteApplicationQuit()
         {
-            Debug.Log("[Pause Menu] 🛑 Encerrando o aplicativo (Application.Quit).");
             Application.Quit();
         }
 
@@ -200,7 +193,6 @@ namespace mil.Core
         {
             if (_curtainController != null) await _curtainController.CloseCurtainAsync(0f);
 
-            // Instancia a introdução mestre em background no frame zero
             EpisodeAnimation masterIntro = _stageSession.ActiveEpisode.MesterIntroAnimationBlock;
             if (masterIntro != null && masterIntro.Animation != null && _stageContainer != null)
             {
@@ -227,11 +219,8 @@ namespace mil.Core
                 return;
             }
 
-            // Limpa o cache do capítulo anterior e faz o pre-load do novo bloco inteiro na memória RAM
             ClearChapterVisualCache();
             PreloadChapterAssets(currentChapter);
-
-            Debug.Log($"[StageController] Caching seco concluído com sucesso para o Capítulo: '{currentChapter.ChapterName}'");
 
             EpisodeAnimation chapterIntro = currentChapter.IntroAnimationBlock;
             if (chapterIntro != null)
@@ -269,7 +258,6 @@ namespace mil.Core
         {
             if (_stageContainer == null) return;
 
-            // 1. Pré-carrega a animação de introdução do capítulo
             if (chapter.IntroAnimationBlock != null && chapter.IntroAnimationBlock.Animation != null)
             {
                 var inst = Object.Instantiate(chapter.IntroAnimationBlock.Animation, _stageContainer);
@@ -277,7 +265,6 @@ namespace mil.Core
                 _cachedAnimationInstances[chapter.IntroAnimationBlock] = inst;
             }
 
-            // 2. Pré-carrega as animações de loop de todas as músicas da fase de uma só vez
             foreach (var song in chapter.Songs)
             {
                 if (song.BackgroundLoopAnimation != null)
@@ -288,7 +275,6 @@ namespace mil.Core
                 }
             }
 
-            // 3. Pré-carrega a animação de encerramento do capítulo
             if (chapter.FinalAnimationBlock != null && chapter.FinalAnimationBlock.Animation != null)
             {
                 var inst = Object.Instantiate(chapter.FinalAnimationBlock.Animation, _stageContainer);
@@ -304,20 +290,16 @@ namespace mil.Core
                 Song currentSong = chapter.Songs[_stageSession.CurrentSongIndex];
                 bool isLastSong = _stageSession.CurrentSongIndex == chapter.Songs.Length - 1;
 
-                // ➔ TRAVA DE VITÓRIA HISTÓRICA:
-                // O C# agora aguarda o veredito booleano do game loop da música.
+
                 bool survivedCleanly = await PlaySongGameLoopAsync(currentSong, chapter.Bpm, chapter.ShaderType, isLastSong);
 
-                // Se o jogador sobreviveu e a música terminou sem rebobinar, avança para a próxima!
                 if (survivedCleanly)
                 {
                     _stageSession.AdvanceSong();
-                    Debug.Log($"[Progresso Palco] ✨ Música concluída com sucesso! Avançando para o índice: {_stageSession.CurrentSongIndex}");
                 }
                 else
                 {
-                    // Se o retorno foi false (devido a falhas), o índice NÃO aumenta e o while força a mesma música a rodar de novo!
-                    Debug.LogWarning($"[Progresso Palco] 🛑 Loop de Tentativa Falhou! Mantendo o jogador na mesma música: '{currentSong.SongName}'");
+                    Debug.LogWarning($"[Player Failed] Looping: '{currentSong.SongName}'");
                 }
             }
 
@@ -368,10 +350,9 @@ namespace mil.Core
             if (_trackSplinePresenter != null)
             {
                 _trackSplinePresenter.SetupChapterLayout(activeShape, activeDifficulty);
-                _trackSplinePresenter.SetCelebratingState(false); // Reseta a trava de sucesso no boot
+                _trackSplinePresenter.SetCelebratingState(false);
             }
 
-            // Assinaturas reativas limpas de eventos de hardware
             _rhythmEngine.OnNoteProcessedWithTimestamp += EvaluateInstrumentAudioFeedback;
             _rhythmEngine.OnMetronomeBeat += HandleMetronomeUIBeat;
             _rhythmEngine.OnSongFailedAndNeedsRewind += HandleSongRewindSequence;
@@ -380,7 +361,7 @@ namespace mil.Core
 
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.Initialize(_audioClock, _rhythmEngine);
 
-            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false); // Nasce oculto esperando o boot
+            if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false); 
             if (_celebrationPresenter != null) _celebrationPresenter.Hide();
 
             if (!string.IsNullOrEmpty(song.MidiFileName))
@@ -403,7 +384,6 @@ namespace mil.Core
 
                 try
                 {
-                    // O laço segura a thread rodando em background até os 35 segundos fecharem
                     await UniTask.Delay(System.TimeSpan.FromSeconds(totalGameplaySeconds - curtainCloseDurationSeconds),
                         delayType: DelayType.Realtime,
                         cancellationToken: _songLoopCancelTokenSource.Token);
@@ -428,7 +408,6 @@ namespace mil.Core
                 }
             }
 
-            // Limpeza de segurança mestre no blackout completo da cortina
             _isCelebratingVictory = false;
             if (_trackSplinePresenter != null) _trackSplinePresenter.SetCelebratingState(false);
             if (_errorCounterPresenter != null) _errorCounterPresenter.gameObject.SetActive(false);
@@ -505,8 +484,7 @@ namespace mil.Core
             var coreAudioInstance = _mainAudioInstance.isValid() ? _mainAudioInstance : _soundtrackAudioInstance;
             _audioClock.SyncWithEvent(coreAudioInstance, bpm);
 
-            // ➔ AJUSTE DE FLUXO ANTI-GLITCH:
-            // Nós esperamos a duração da animação inteira rolar em tela aberta, MENOS o tempo de fechamento da cortina.
+
             float animDurationSeconds = animationBlock.DurationSeconds;
             float closeDurationSeconds = 0.5f;
 
@@ -514,9 +492,6 @@ namespace mil.Core
 
             if (_curtainController != null)
             {
-                // ✅ CORREÇÃO CIRÚRGICA: Colocamos o 'await' na frente do fechamento da cortina!
-                // Isso congela o fluxo do C# por 0.5 segundos enquanto a máscara preta fecha no visor.
-                // As linhas de baixo de destruição e limpeza de assets SÓ vão rodar quando a tela estiver 100% escura!
                 await _curtainController.CloseCurtainAsync(closeDurationSeconds);
             }
 
@@ -562,7 +537,6 @@ namespace mil.Core
             }
             else
             {
-                // No momento em que as splines começam a inflar, o ErrorCounter desce do teto junto!
                 if (_errorCounterPresenter != null && !_errorCounterPresenter.gameObject.activeSelf)
                 {
                     _errorCounterPresenter.ResetAllCounters();
@@ -590,19 +564,17 @@ namespace mil.Core
                 _rhythmEngine.OnSongNotesCompletedSuccessfully -= HandleSongNotesCompletedVictory;
                 _rhythmEngine.OnMissPenaltyAccumulated -= _errorCounterPresenter.UpdateMissVisual;
                 _rhythmEngine.OnSongFailedAndNeedsRewind -= HandleSongRewindSequence;
-                _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat; // Desconecta o metrônomo no escuro
+                _rhythmEngine.OnMetronomeBeat -= HandleMetronomeUIBeat;
                 _rhythmEngine.OnNoteProcessedWithTimestamp -= EvaluateInstrumentAudioFeedback;
 
-                _rhythmEngine.StopEngine(); // Desliga o motor rítmico de forma segura
+                _rhythmEngine.StopEngine();
             }
 
             if (_rhythmEngine != null) _rhythmEngine.ClearTimeline();
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
 
-            // ✅ CORREÇÃO DE CONTINUIDADE VISUAL:
-            // Apaga e esconde o painel de vitória do sucesso assim que a música é encerrada fisicamente!
-            // Isso garante que ele NUNCA vaze por cima das animações finais ou da troca de capítulos.
+
             if (_celebrationPresenter != null)
             {
                 _celebrationPresenter.Hide();
@@ -627,17 +599,14 @@ namespace mil.Core
             }
 
             float exactCounterTriggerMs = 0f;
-            Debug.LogWarning($"[REBATIMENTO DE CABECEIRA] 3 Falhas! Voltando FMOD para o início.");
 
             _songAudioInstance.setTimelinePosition((int)exactCounterTriggerMs);
             _songAudioInstance.setParameterByName("LeadMute", 0.0f);
 
-            // ✅ LIMPEZA DE SEGURANÇA E RE-BOOT DO RESET:
-            if (_celebrationPresenter != null) _celebrationPresenter.Hide(); // Esconde o círculo de comemoração
+            if (_celebrationPresenter != null) _celebrationPresenter.Hide();
             if (_rhythmStagePresenter != null) _rhythmStagePresenter.ClearActiveNotesVisual();
             if (_rhythmCounterVisual != null) _rhythmCounterVisual.Hide();
 
-            // Força o acendimento elástico das 3 vidas de volta na HUD
             if (_errorCounterPresenter != null) _errorCounterPresenter.ResetAllCounters();
 
             _rhythmEngine.ResetEngineForRewind();
@@ -650,42 +619,29 @@ namespace mil.Core
 
         private async UniTaskVoid ExecuteSuccessCinemaSequenceAsync()
         {
-            // Bloqueia qualquer entrada fantasma do metrônomo mudando a flag global
             _isCelebratingVictory = true;
 
-            Debug.Log("[StageController] 🎸 Partitura Concluída com Sucesso! Iniciando 1 segundo de respiro estático.");
-
-            // ➔ 1. O TIMING DE RETENÇÃO DE VITÓRIA (1 SEGUNDO DE TELA CHEIA ATIVA):
-            // O C# segura as splines e as vidas estáticas na tela por exatamente 1.0 segundo de tempo real de catarse acústica!
             await UniTask.Delay(System.TimeSpan.FromSeconds(1.0f), delayType: DelayType.Realtime);
 
-            Debug.Log("[StageController] ➔ Executando ANIMATED OUT elástico síncrono da HUD e Splines!");
 
-            // ➔ 2. A COREOGRAFIA DE RETIRADA VISUAL VIA ANIMAÇÕES (ANIMATED OUT DE VERDADE):
-            // Ativamos a trava de segurança de comemoração nas pistas para não desligar os pais na hierarquia
             if (_trackSplinePresenter != null)
             {
                 _trackSplinePresenter.SetCelebratingState(true);
-                _trackSplinePresenter.SetSplinesVisible(false); // ✅ As splines individuais mergulham em escada para baixo!
+                _trackSplinePresenter.SetSplinesVisible(false);
             }
 
             if (_errorCounterPresenter != null)
             {
-                _errorCounterPresenter.HideWithCascadeAnimation(); // ✅ As 3 vidas individuais sobem em escada voando para o teto!
+                _errorCounterPresenter.HideWithCascadeAnimation();
             }
 
             if (_rhythmCounterVisual != null)
             {
-                _rhythmCounterVisual.HideWithScaleAnimation(); // Círculo central murcha elástico
+                _rhythmCounterVisual.HideWithScaleAnimation();
             }
 
-            // Aguardamos as duas animações elásticas do DOTween limparem o visor da cena (0.45 segundos)
             await UniTask.Delay(System.TimeSpan.FromSeconds(0.45f), delayType: DelayType.Realtime);
 
-            Debug.Log("[StageController] ➔ Palco limpo! Ativando o CelebrationPresenter Circle Feedback.");
-
-            // ➔ 3. ENTRA A CELEBRAÇÃO EXCLUSIVA:
-            // Com a tela 100% limpa de notas, pistas e vidas, o círculo de sucesso expande de 0.8 a 1.0 e passa a pulsar no BPM!
             if (_celebrationPresenter != null)
             {
                 _celebrationPresenter.Show();

@@ -17,7 +17,7 @@ namespace mil.UI
 
         private AudioClock _audioClock;
         private RhythmEngine _rhythmEngine;
-        private TrackSplinePresenter _trackSplinePresenter; 
+        private TrackSplinePresenter _trackSplinePresenter;
 
         private readonly List<RhythmNoteVisual> _notePool = new();
         private readonly List<RhythmNoteVisual> _activeNotes = new();
@@ -54,9 +54,6 @@ namespace mil.UI
                 }
             }
 
-            // ✅ ANULAÇÃO TOTAL DE DUPLICADOS DE EVENTO (ANTI-BUG DE ANIMAÇÃO DUPLA):
-            // Nós removemos RIGOROSAMENTE qualquer assinatura velha pendente nas instâncias do pool 
-            // antes de registrar as novas escutas, garantindo que a animação da Hold Note rode estritamente uma única vez!
             _rhythmEngine.OnNoteSpawnedWithHoldData -= SpawnNoteVisual;
             _rhythmEngine.OnNoteProcessedWithTimestamp -= ConsumeNoteVisualWithTimestamp;
             _rhythmEngine.OnTrackVisibilityChanged -= SetVisible;

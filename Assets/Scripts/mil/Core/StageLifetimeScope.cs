@@ -45,15 +45,13 @@ namespace mil.Core
         {
             if (audioClockPrefab == null || stageContainer == null || rhythmStagePresenter == null)
             {
-                Debug.LogError($"[StageLifetimeScope] Certifique-se de preencher as referências do Inspector em {gameObject.name}! Há campos vazios.");
+                Debug.LogError("Mandatory Prefabs Objects are null");
                 return;
             }
 
-            // 2. Registra os componentes físicos e prefabs da cena
             builder.RegisterComponentInNewPrefab(audioClockPrefab, Lifetime.Singleton).AsSelf();
             builder.RegisterComponent(stageContainer);
 
-            // 3. CORREÇÃO: Registra o apresentador visual de Splines no container! (Estava faltando!)
             builder.RegisterComponent(rhythmStagePresenter);
             builder.RegisterComponent(curtainController);
             builder.RegisterComponent(rhythmCounterVisual);
@@ -63,16 +61,14 @@ namespace mil.Core
             builder.RegisterComponent(errorCounterPresenter);
             builder.RegisterComponent(creditsPresenter);
 
-            // 4. CORREÇÃO: Registra o RhythmEngine e StageVisualController no loop nativo da Unity (ITickable)
-            // Usando RegisterEntryPoint, o VContainer gerencia o Update automático de frame E libera a injeção no construtor!
             builder.RegisterEntryPoint<RhythmEngine>().AsSelf();
             builder.RegisterEntryPoint<StageVisualController>().AsSelf();
 
-            // Mecanismo Failsafe de teste isolado de cena
             if (Parent == null)
             {
-                Debug.LogWarning("[StageLifetimeScope] Modo de Teste Isolado ativo. Injetando dados virtuais.");
+                Debug.LogWarning("[StageLifetimeScope]Test Mode.");
                 builder.Register<GameSettingsModel>(Lifetime.Singleton);
+                builder.Register<SceneLoader>(Lifetime.Singleton);
                 builder.Register<InputHandler>(Lifetime.Singleton).AsImplementedInterfaces().AsSelf();
 
                 var mockSession = new StageSessionModel();

@@ -22,14 +22,10 @@ namespace mil.Core
             _audioClock = audioClock;
         }
 
-        /// <summary>
-        /// Este é o único método público necessário. Ele captura e configura os shaders da instância spawnada.
-        /// </summary>
         public void LinkWithSpawnedInstance(GameObject spawnedInstance, ShaderType type, int chapterBpm)
         {
             if (spawnedInstance == null) return;
 
-            // 1. Captura todos os componentes visuais dentro do Prefab instanciado no palco
             var spriteRenderers = spawnedInstance.GetComponentsInChildren<SpriteRenderer>(true);
             var canvasImages = spawnedInstance.GetComponentsInChildren<Image>(true);
 
@@ -43,21 +39,19 @@ namespace mil.Core
             _activeMaterials = new Material[totalRenderers];
             int index = 0;
 
-            // 2. CORREÇÃO CRÍTICA: Clona o material e força o componente a usá-lo na cena!
+
             foreach (var sprite in spriteRenderers)
             {
-                // Criamos um clone limpo baseado no material atual do sprite
                 Material clonedMat = new Material(sprite.sharedMaterial != null ? sprite.sharedMaterial : sprite.material);
-                sprite.material = clonedMat; // Força o SpriteRenderer a usar a cópia de runtime
+                sprite.material = clonedMat;
                 _activeMaterials[index] = clonedMat;
                 index++;
             }
 
             foreach (var img in canvasImages)
             {
-                // Faz o mesmo para elementos de interface (Canvas UI) se houver
                 Material clonedMat = new Material(img.material != null ? img.material : img.defaultMaterial);
-                img.material = clonedMat; // Força a Image a usar a cópia de runtime
+                img.material = clonedMat;
                 _activeMaterials[index] = clonedMat;
                 index++;
             }
@@ -65,10 +59,9 @@ namespace mil.Core
             _hasActiveMaterials = true;
             _currentBpmSpeedFactor = chapterBpm / 60f;
 
-            // 3. Configura os parâmetros iniciais da GPU baseados no tipo do Shader do Capítulo
             ConfigureShaderProperties(type);
         }
-        // Método privado que configura as propriedades do shader dinamicamente na GPU
+
         private void ConfigureShaderProperties(ShaderType type)
         {
             if (!_hasActiveMaterials) return;
@@ -89,7 +82,6 @@ namespace mil.Core
                         break;
 
                     case ShaderType.Watercolor:
-                        // Configurações específicas de aquarela se necessário
                         break;
                 }
             }

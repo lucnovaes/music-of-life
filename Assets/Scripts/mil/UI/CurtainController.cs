@@ -15,23 +15,18 @@ namespace mil.UI
 
         private void Awake()
         {
-            // O jogo sempre inicia com a cortina completamente fechada (Tela escura)
             if (irisMaskTransform != null)
             {
                 irisMaskTransform.localScale = _closedScale;
             }
         }
 
-        /// <summary>
-        /// Abre a cortina expandindo o círculo invisível, revelando a gameplay.
-        /// </summary>
         public async UniTask OpenCurtainAsync(float durationSeconds)
         {
             if (irisMaskTransform == null) return;
 
             irisMaskTransform.DOKill();
             
-            // Usa o Ease.OutQuint para dar aquele efeito cinematográfico elástico e elegante na abertura
             await irisMaskTransform.DOScale(_openedScale, durationSeconds)
                 .SetEase(Ease.OutQuint)
                 .AsyncWaitForCompletion();
@@ -39,9 +34,6 @@ namespace mil.UI
             Debug.Log("[CurtainSystem] Cortina em círculo ABERTA. Gameplay revelada.");
         }
 
-        /// <summary>
-        /// Fecha a cortina encolhendo o círculo até zero, deixando a tela preta.
-        /// </summary>
         public async UniTask CloseCurtainAsync(float durationSeconds)
         {
             if (irisMaskTransform == null) return;

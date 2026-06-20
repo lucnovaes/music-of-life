@@ -7,8 +7,8 @@ namespace mil.Data
     public sealed class SplineShapeConfiguration
     {
         [Header("Configuração de Linhas por Dificuldade")]
-        public DifficultySplineGroup easyGroup;   // 2 Pistas
-        public DifficultySplineGroup mediumGroup; // 3 Pistas
-        public DifficultySplineGroup hardGroup;   // 4 Pistas
+        public DifficultySplineGroup easyGroup;
+        public DifficultySplineGroup mediumGroup;
+        public DifficultySplineGroup hardGroup;
     }
 }

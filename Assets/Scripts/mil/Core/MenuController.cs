@@ -24,7 +24,6 @@ namespace mil.Core
         private bool _selectingEpisode = false;
         private bool _selectingDifficulty = false;
 
-        // O VContainer injeta tudo automaticamente (incluindo o Presenter da cena local)
         public MenuController(
             GameSettingsModel gameSettings,
             StageSessionModel stageSession,
@@ -45,16 +44,12 @@ namespace mil.Core
 
         public void Start()
         {
-            // 1. Define visualmente quem está habilitado com base no save
             _mainMenuPresenter.SetOptionInteractable(0, _gameSettings.HasSaveGame);
 
-            // 2. Determina o índice inicial lógico
             _selectedIndex = _gameSettings.HasSaveGame ? 0 : 1;
 
-            // 3. CORREÇÃO: Inicializa o estado visual IMEDIATAMENTE de forma estática (Sem Tweens/Sem Glitch)
             _mainMenuPresenter.InitInitialVisualState(_selectedIndex);
 
-            // 4. Escuta as entradas globais normalmente
             _inputHandler.OnNavigateUp += NavigateUp;
             _inputHandler.OnNavigateDown += NavigateDown;
             _inputHandler.OnSelect += ExecuteSelection;

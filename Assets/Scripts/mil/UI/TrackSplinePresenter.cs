@@ -25,7 +25,6 @@ namespace mil.UI
         private readonly List<Vector3> _receptorOriginalScales = new List<Vector3>();
         private bool _isCelebrating;
 
-        // Distância física real de mergulho para a animação de entrada/saída
         private const float SlideDistanceY = -8f;
 
         public void SetupChapterLayout(SplineShape shape, Difficulty difficulty)
@@ -71,9 +70,6 @@ namespace mil.UI
                 }
             }
 
-            // ✅ BLINDAGEM MESTRE DE BAKE RÍGIDO:
-            // Força todas as splines a voltarem para a origem legítima (0,0,0) ANTES de desenhar as malhas!
-            // Isso impede que os LineRenderers façam o Bake lendo coordenadas tortas ou deslocadas.
             if (_activeTrackSplines != null)
             {
                 for (int i = 0; i < _activeTrackSplines.Length; i++)
@@ -81,8 +77,8 @@ namespace mil.UI
                     if (_activeTrackSplines[i] == null) continue;
 
                     Transform splineTx = _activeTrackSplines[i].transform;
-                    splineTx.DOKill(); // Mata tweens antigos pendentes
-                    splineTx.localPosition = Vector3.zero; // Garante o alinhamento de fábrica (0,0,0)
+                    splineTx.DOKill();
+                    splineTx.localPosition = Vector3.zero;
                     _activeTrackSplines[i].gameObject.SetActive(true);
 
                     if (_activeLineRenderers != null && i < _activeLineRenderers.Length && _activeLineRenderers[i] != null)
@@ -99,7 +95,6 @@ namespace mil.UI
                         }
                     }
 
-                    // Deixa invisível temporariamente até o método SetSplinesVisible ser chamado
                     _activeTrackSplines[i].gameObject.SetActive(false);
                 }
             }
@@ -121,7 +116,6 @@ namespace mil.UI
             receptor.transform.DOScale(baseScale, 0.12f).SetEase(Ease.OutQuad);
         }
 
-        // ➔ COREOGRAFIA DE MOVIMENTO CORRIGIDA E LIMPA:
         public void SetSplinesVisible(bool visible)
         {
             if (_activeTrackSplines == null || _activeTrackSplines.Length == 0) return;
@@ -136,13 +130,11 @@ namespace mil.UI
                     if (_activeTrackSplines[i] == null) continue;
 
                     Transform splineTx = _activeTrackSplines[i].transform;
-                    splineTx.DOKill(); // Garante folga de memória
+                    splineTx.DOKill();
                     _activeTrackSplines[i].gameObject.SetActive(true);
 
-                    // Força a largada física vindo milimetricamente de baixo (-8f)
                     splineTx.localPosition = new Vector3(0f, SlideDistanceY, 0f);
 
-                    // Sobe deslizando de baixo para cima até a origem real de design (0,0,0)
                     splineTx.DOLocalMove(Vector3.zero, 0.45f)
                         .SetEase(Ease.OutBack)
                         .SetDelay(i * 0.1f);
@@ -162,10 +154,8 @@ namespace mil.UI
                     GameObject trackGo = _activeTrackSplines[i].gameObject;
                     bool isLast = (i == totalTracks - 1);
 
-                    // Garante que parta do topo cravado antes de despencar
                     splineTx.localPosition = Vector3.zero;
 
-                    // Mergulha as pistas em escada para baixo da tela de forma animada (Animated Out legítimo!)
                     splineTx.DOLocalMove(hidePos, 0.35f)
                         .SetEase(Ease.InBack)
                         .SetDelay(i * 0.1f)
@@ -173,7 +163,6 @@ namespace mil.UI
                         {
                             trackGo.SetActive(false);
 
-                            // Só apaga os contêineres se não estiver em modo de comemoração de sucesso
                             if (isLast && !_isCelebrating)
                             {
                                 if (_currentActiveHolder != null) _currentActiveHolder.SetActive(false);

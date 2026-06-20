@@ -13,7 +13,6 @@ namespace mil.Core
 
         protected override void Configure(IContainerBuilder builder)
         {
-            // Validação preventiva idêntica à da Splash Screen
             if (mainMenuPresenter == null)
             {
                 Debug.LogError($"[MenuLifetimeScope] Main Menu Presenter is not set!");

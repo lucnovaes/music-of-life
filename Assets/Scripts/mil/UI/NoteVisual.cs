@@ -7,8 +7,8 @@ namespace mil.UI
     public sealed class RhythmNoteVisual : MonoBehaviour
     {
         [Header("Circular Visual Components")]
-        [SerializeField] private SpriteRenderer backgroundOutline; // Filho 1: O anel de contorno fixo
-        [SerializeField] private SpriteRenderer centerCircle;      // Filho 2: O miolo preenchido que infla
+        [SerializeField] private SpriteRenderer backgroundOutline;
+        [SerializeField] private SpriteRenderer centerCircle;
 
         private float _targetTimestampMs;
         private float _durationMs;
@@ -23,7 +23,7 @@ namespace mil.UI
         private float _holdTimerMs;
         private System.Action _onHoldCompleteCallback;
         private Vector3 _originalScale = Vector3.one;
-        private readonly Vector3 _shrunkCenterScale = new Vector3(0.35f, 0.35f, 0.35f); // Começa bem menor para dar o efeito vazado
+        private readonly Vector3 _shrunkCenterScale = new Vector3(0.35f, 0.35f, 0.35f);
 
         public float TargetTimestampMs => _targetTimestampMs;
         public int NoteType => _noteType;
@@ -59,18 +59,15 @@ namespace mil.UI
             _isBeingHeld = false;
             _holdTimerMs = 0f;
 
-            // Reseta a escala do PAI para o padrão original de pool
             transform.localScale = _originalScale;
             gameObject.SetActive(true);
 
             ApplyBasePaletteColor();
 
-            // Garante com 100% de certeza que o miolo central nasça ENCOLHIDO (vazado) no spawn
             if (centerCircle != null)
             {
                 centerCircle.transform.localScale = _isHoldNote ? _shrunkCenterScale : Vector3.one;
 
-                // Restaura a opacidade total para o miolo central ao sair do pool
                 Color cc = centerCircle.color;
                 centerCircle.color = new Color(cc.r, cc.g, cc.b, 1f);
             }
@@ -87,12 +84,12 @@ namespace mil.UI
             Color targetColor = Color.white;
             switch (_noteType)
             {
-                case 0: targetColor = new Color(0.0f, 0.25f, 0.7f, 1.0f); break;   // Grave: Azul
-                case 1: targetColor = new Color(0.0f, 0.75f, 1.0f, 1.0f); break;  // Semi-Grave: Ciano
-                case 2: targetColor = new Color(1.0f, 0.08f, 0.58f, 1.0f); break; // Semi-Aguda: Rosa
-                case 3: targetColor = new Color(0.0f, 1.0f, 0.4f, 1.0f); break;   // Aguda: Verde
-                case 4: targetColor = new Color(1.0f, 1.0f, 1.0f, 0.45f); break;  // Fantasma: Branco
-                case 5: targetColor = new Color(1.0f, 0.1f, 0.1f, 1.0f); break;    // Errada: Vermelho
+                case 0: targetColor = new Color(0.0f, 0.25f, 0.7f, 1.0f); break;
+                case 1: targetColor = new Color(0.0f, 0.75f, 1.0f, 1.0f); break;
+                case 2: targetColor = new Color(1.0f, 0.08f, 0.58f, 1.0f); break;
+                case 3: targetColor = new Color(0.0f, 1.0f, 0.4f, 1.0f); break;
+                case 4: targetColor = new Color(1.0f, 1.0f, 1.0f, 0.45f); break;
+                case 5: targetColor = new Color(1.0f, 0.1f, 0.1f, 1.0f); break;
             }
 
             if (backgroundOutline != null) backgroundOutline.color = targetColor;
@@ -101,7 +98,8 @@ namespace mil.UI
 
         public void StartHoldCharging(System.Action onComplete)
         {
-            if (!_isActive || _isDying) return;
+            if (!_isActive || _isDying || _isBeingHeld) return;
+
             _isBeingHeld = true;
             _holdTimerMs = 0f;
             _onHoldCompleteCallback = onComplete;
@@ -110,7 +108,7 @@ namespace mil.UI
         public void PlayHitFeedback(System.Action onComplete)
         {
             _isDying = true;
-            _isBeingHeld = false; // ✅ CORREÇÃO DE DESCLIQUE: Garante o corte da flag no frame do acerto!
+            _isBeingHeld = false;
 
             transform.DOScale(_originalScale * 2.2f, 0.15f).SetEase(Ease.OutExpo);
 
@@ -135,7 +133,7 @@ namespace mil.UI
         public void PlayMissFeedback(System.Action onComplete)
         {
             _isDying = true;
-            _isBeingHeld = false; // ✅ CORREÇÃO DE DESCLIQUE: Quando o apresentador chama o Miss por soltura precoce, desliga o holding na hora!
+            _isBeingHeld = false;
 
             transform.DOScale(Vector3.zero, 0.12f).SetEase(Ease.InBack);
 
@@ -157,7 +155,6 @@ namespace mil.UI
 
         public void Deactivate()
         {
-            // ✅ TRAVA DO OBJECT POOL: Mata animações pendentes ao desligar o objeto
             transform.DOKill();
             if (backgroundOutline != null) backgroundOutline.DOKill();
             if (centerCircle != null) { centerCircle.DOKill(); centerCircle.transform.DOKill(); }
@@ -166,8 +163,6 @@ namespace mil.UI
             _isDying = false;
             _isBeingHeld = false;
 
-            // ✅ ANTI-DUPLICAÇÃO: Reseta rigorosamente o tamanho do miolo central para o padrão de pool!
-            // Isso impede que, ao reativar a nota na próxima música, ela nasça gigante herdando o lixo do lerp!
             if (centerCircle != null)
             {
                 centerCircle.transform.localScale = Vector3.one;
@@ -180,24 +175,20 @@ namespace mil.UI
         {
             if (!_isActive || _isDying || splineContainer == null) return;
 
-            // ➔ COMPORTAMENTO A: EXPANSÃO CONCÊNTRICA DO MIOLO (PLAYER SEGURANDO)
             if (_isBeingHeld)
             {
-                // Trava fixa no final da pista (Alvo de impacto)
                 transform.localPosition = splineContainer.EvaluatePosition(1f);
 
-                _holdTimerMs += Time.deltaTime * 1000f; // Converte para milissegundos
+                _holdTimerMs += Time.deltaTime * 1000f;
                 float progress = _holdTimerMs / _durationMs;
                 progress = Mathf.Clamp01(progress);
 
                 if (centerCircle != null)
                 {
-                    // Infla gradualmente do tamanho encolhido até engolir o contorno em 1.0x!
                     float scaleFactor = Mathf.Lerp(_shrunkCenterScale.x, 1.0f, progress);
                     centerCircle.transform.localScale = new Vector3(scaleFactor, scaleFactor, scaleFactor);
                 }
 
-                // Completou a barra inteira com sucesso! Explode e some!
                 if (progress >= 1f)
                 {
                     _isBeingHeld = false;
@@ -207,7 +198,6 @@ namespace mil.UI
                 return;
             }
 
-            // ➔ COMPORTAMENTO B: MOVIMENTO LINEAR PADRÃO PELA SPLINE
             float timeRemainingMs = _targetTimestampMs - (float)currentAudioTimeMs;
             float travelProgress = 1.0f - (timeRemainingMs / lookAheadMs);
             travelProgress = Mathf.Clamp01(travelProgress);

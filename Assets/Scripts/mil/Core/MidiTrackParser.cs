@@ -35,8 +35,6 @@ namespace mil.Core
 
             List<MidiNoteData> extractedNotes = new();
 
-            // CORREÇÃO DE INFRAESTRUTURA: Nomeamos explicitamente as variáveis da tupla (startTime e startVelocity)
-            // Isso garante que o compilador da Unity encontre os nomes corretos no bloco de leitura abaixo!
             Dictionary<int, (float startTime, int startVelocity)> openNotes = new();
 
             try
@@ -50,7 +48,7 @@ namespace mil.Core
                 ReadNetworkOrderInt32(reader);
                 short format = ReadNetworkOrderInt16(reader);
                 short trackCount = ReadNetworkOrderInt16(reader);
-                short division = ReadNetworkOrderInt16(reader); // PPQ
+                short division = ReadNetworkOrderInt16(reader);
 
                 float currentBpm = 120f;
 
@@ -136,7 +134,6 @@ namespace mil.Core
                     {
                         openNotes[pitch] = (currentTimeInMs, velocity);
                     }
-                    // Dentro do seu MidiTrackParser.cs -> método ParseTrackBytes -> no bloco de Note Off:
                     else if (commandType == 0x80 || (commandType == 0x90 && velocity == 0))
                     {
                         if (openNotes.TryGetValue(pitch, out var startData))
@@ -145,11 +142,10 @@ namespace mil.Core
                             float durationMs = currentTimeInMs - startData.startTime;
                             openNotes.Remove(pitch);
 
-                            // Classificação de tipos por Velocity/Pitch original do GDD
                             int assignedType;
-                            if ((pitch >= 124 && pitch <= 126 || startData.startVelocity >= 1 && startData.startVelocity <= 15) || (startData.startVelocity >= 1 && startData.startVelocity <= 45))
+                            if ((pitch >= 124 && pitch <= 126) || (startData.startVelocity >= 1 && startData.startVelocity <= 31))
                             {
-                                assignedType = 4; // DEAD Note do Guitar Pro 8
+                                assignedType = 4; // DEAD note / Ghost Note
                             }
                             else
                             {
@@ -157,7 +153,7 @@ namespace mil.Core
                                 else
                                 {
                                     int pitchDelta = pitch - lastPitch;
-                                    // Change 4 : UnityEngine.Random.Range(0, 4); to 5 : UnityEngine.Random.Range(0, 4); If we want implement WRONG NOTES
+                                    // Change: UnityEngine.Random.Range(0, 4); to 5 : UnityEngine.Random.Range(0, 4); If we want implement WRONG NOTES
                                     if (pitchDelta == 0) assignedType = (UnityEngine.Random.Range(0, 100) < 15) ? 4 : UnityEngine.Random.Range(0, 4);
                                     else if (pitchDelta > 0) assignedType = pitchDelta > 2 ? 3 : 2;
                                     else assignedType = pitchDelta < -2 ? 0 : 1;
@@ -165,13 +161,8 @@ namespace mil.Core
                                 lastPitch = pitch;
                             }
 
-                            // -----------------------------------------------------------------
-                            // CALIBRAÇÃO DO LIMIAR SOLICITADO (1000ms Fixo de Segurança)
-                            // -----------------------------------------------------------------
-                            // Notas com duração igual ou maior que 1 segundo (1000ms) viram Hold Notes!
                             bool isHold = durationMs >= 1000f;
 
-                            // Regra dos 80% de janela de conforto para o jogador soltar o dedo
                             float finalDurationMs = isHold ? (durationMs * 0.80f) : durationMs;
 
                             extractedNotes.Add(new MidiNoteData
@@ -179,7 +170,7 @@ namespace mil.Core
                                 TimestampMs = startData.startTime,
                                 DurationMs = finalDurationMs > 10f ? finalDurationMs : 400f,
                                 NoteType = assignedType,
-                                IsHoldNote = isHold // Retorna a variável matemática legítima!
+                                IsHoldNote = isHold
                             });
                         }
                     }

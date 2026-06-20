@@ -1,5 +1,5 @@
 using UnityEngine;
-using mil.Core; // Certifique-se de que o seu SceneLoaderService está neste namespace
+using mil.Core;
 using DG.Tweening;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
@@ -51,7 +51,6 @@ namespace mil.UI
 
             transform.DOKill(true);
 
-            // Dispara o serviço assíncrono legítimo para carregar a cena do Menu Principal
             if (_sceneLoader != null)
             {
                 await _sceneLoader.LoadSceneAsync(GameScene.MainMenu);

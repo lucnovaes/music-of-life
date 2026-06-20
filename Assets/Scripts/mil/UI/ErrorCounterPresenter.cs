@@ -7,13 +7,13 @@ namespace mil.UI
     public sealed class ErrorCounterPresenter : MonoBehaviour
     {
         [Header("Visual Elements")]
-        [SerializeField] private SpriteRenderer[] counterContents; // Os 3 'Fill' de vida
+        [SerializeField] private SpriteRenderer[] counterContents;
 
         private Vector3[] _originalLocalPositions;
         private Vector3[] _originalScales;
         private Color _baseColor;
 
-        private const float HUDOffsetY = 5f; // Deslocamento do teto
+        private const float HUDOffsetY = 5f;
 
         public void ResetAllCounters()
         {
@@ -50,7 +50,6 @@ namespace mil.UI
                 sr.color = _baseColor;
                 tx.localScale = _originalScales[i];
 
-                // ANIMAÇÃO DE ENTRADA: Nasce recuado e desce elástico em escada!
                 Vector3 targetPos = _originalLocalPositions[i];
                 tx.localPosition = targetPos + new Vector3(0f, HUDOffsetY, 0f);
 
@@ -75,7 +74,6 @@ namespace mil.UI
             });
         }
 
-        // ➔ ANIMAÇÃO DE SAÍDA DAS VIDAS EM CASCATA EM DIREÇÃO AO TETO (ANIMATED OUT ATIVA):
         public void HideWithCascadeAnimation()
         {
             if (counterContents == null) return;

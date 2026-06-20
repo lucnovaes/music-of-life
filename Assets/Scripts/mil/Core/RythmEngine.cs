@@ -10,7 +10,7 @@ namespace mil.Core
         private readonly AudioClock _audioClock;
         private readonly InputHandler _inputHandler;
 
-        private const float HitWindowMs = 120f;
+        private const float HitWindowMs = 200f;
         private const float LookAheadMs = 2500f;
 
         private float[] _timestampsMs;
@@ -47,7 +47,6 @@ namespace mil.Core
 
         private const int MaxAllowedMisses = 3;
 
-        // EXPANSÃO DO EVENTO: Repassa o Timestamp exato da nota processada para a UI não apagar a nota errada!
         public event Action<NoteResult, float> OnNoteProcessedWithTimestamp;
         public event Action<float, float, int, bool> OnNoteSpawnedWithHoldData;
         public event Action<bool> OnTrackVisibilityChanged;
@@ -135,24 +134,19 @@ namespace mil.Core
 
             double currentAudioTimeMs = _audioClock.CurrentAudioTimeMs;
 
-            // ➔ FASE 1: GERENCIAMENTO DE ENTRADA DINÂMICA (2 COMPASSOS ANTES)
             if (!_isGameplayStarted)
             {
-                // Calcula o ponto exato de ativação física da HUD na linha do tempo
                 float hudTriggerTimeMs = _firstNoteTimestampMs - (_msPerMeasure * 2f) - LookAheadMs;
                 if (hudTriggerTimeMs < 0f) hudTriggerTimeMs = 0f;
 
-                // Se o áudio do FMOD cruzou a marca de 2 compassos antes da primeira nota:
                 if (currentAudioTimeMs >= hudTriggerTimeMs && !_hasTriggeredHudAppearance)
                 {
                     _hasTriggeredHudAppearance = true;
 
-                    // ✅ SINAL DE APARIÇÃO: As Splines e as pistas de notas se acendem na HUD!
                     OnTrackVisibilityChanged?.Invoke(true);
                     OnGameplayLoopStarted?.Invoke();
                 }
 
-                // Se a HUD já apareceu, rodamos o círculo contador regressivo durante os 2 compassos de aproximação
                 if (_hasTriggeredHudAppearance)
                 {
                     float timeUntilFirstNote = _firstNoteTimestampMs - (float)currentAudioTimeMs;
@@ -163,22 +157,20 @@ namespace mil.Core
                         {
                             _lastBeatCounted = currentBeatIndex;
 
-                            // Faz o círculo central pulsar (8, 7, 6, 5, 4, 3, 2, 1...) no ritmo do metrônomo
                             OnMetronomeBeat?.Invoke(_msPerBeat / 1000f);
                         }
                     }
                 }
 
-                // No frame em que o tempo de áudio alcança a janela de spawn da primeira nota, libera o laço de gameplay
                 if (currentAudioTimeMs >= _firstNoteTimestampMs - LookAheadMs)
                 {
                     _isGameplayStarted = true;
                     _spawnedNotesInCurrentLoop.Clear();
                 }
-                return; // Retém o spawn de notas até a janela de aproximação expirar
+                return;
             }
 
-            // FASE 2: SPAWN DE GAMEPLAY ATIVA (NOTAS CORRENDO PELA SPLINE)
+            // Building notes to splines
             while (_nextNoteIndexToSpawn < _timestampsMs.Length &&
                    _timestampsMs[_nextNoteIndexToSpawn] - currentAudioTimeMs <= LookAheadMs)
             {
@@ -196,7 +188,6 @@ namespace mil.Core
                 _nextNoteIndexToSpawn++;
             }
 
-            // MONITORAMENTO DA COLA POLIFÔNICA DAS HOLD NOTES POR PISTA
             for (int t = 0; t < 4; t++)
             {
                 if (_isTrackHoldingActive[t])
@@ -218,7 +209,6 @@ namespace mil.Core
                 }
             }
 
-            // Miss Automático por tempo se a nota passou direto sem clique inicial do jogador
             while (_activeNoteTimesOnScreenMs.Count > 0 &&
                    currentAudioTimeMs - _activeNoteTimesOnScreenMs[0] > HitWindowMs)
             {
@@ -234,7 +224,7 @@ namespace mil.Core
                     if (passedNoteType != 5)
                     {
                         OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, passedTime);
-                        if (_hasTriggeredHudAppearance) RegisterMissPenalty(); // Apenas pune se a HUD já estava ativa
+                        if (_hasTriggeredHudAppearance) RegisterMissPenalty();
                     }
                 }
             }
@@ -252,12 +242,9 @@ namespace mil.Core
                 {
                     _isGameplayStarted = false;
 
-                    // ✅ O ANTÍDOTO DO LOOP: Desliga o motor rítmico IMEDIATAMENTE por hardware!
-                    // Isso impede que o método Tick() execute qualquer linha de código ou checagem 
-                    // no frame seguinte, matando o loop infinito de eventos na hora!
                     _isEngineActive = false;
 
-                    OnSongNotesCompletedSuccessfully?.Invoke(); // Dispara o pulso único legítimo
+                    OnSongNotesCompletedSuccessfully?.Invoke();
 
                     Debug.LogWarning("[RhythmEngine] 🎯 Vitória selada de forma única! Motor rítmico desligado em background.");
                 }
@@ -283,11 +270,10 @@ namespace mil.Core
             _activeNoteTimesOnScreenMs.RemoveAt(0);
             _activeNoteTypesOnScreen.RemoveAt(0);
 
-            // CASO A: Jogador apertou uma Nota Errada / Obstáculo -> Sempre Miss
             if (targetNoteType == 5)
             {
                 OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, targetNoteTimeMs);
-                RegisterMissPenalty(); // ✅ TRAVA DE SEGURANÇA
+                RegisterMissPenalty();
                 return;
             }
 
@@ -313,10 +299,8 @@ namespace mil.Core
             }
             else
             {
-                // CASO B: Jogador errou o botão ou a pista da nota normal -> Computa Miss
                 OnNoteProcessedWithTimestamp?.Invoke(NoteResult.Miss, targetNoteTimeMs);
 
-                // ✅ TRAVA DE SEGURANÇA: Registra o castigo imediatamente no frame do clique errado!
                 RegisterMissPenalty();
             }
         }
@@ -358,7 +342,6 @@ namespace mil.Core
 
             _missCounter++;
 
-            // ✅ DISPARA O PULSO DE HUD: Avisa a interface para apagar o Content correspondente na marra!
             OnMissPenaltyAccumulated?.Invoke(_missCounter);
 
             Debug.Log($"[Motor Punição] ❌ FALHA COMPUTADA! Erros acumulados: {_missCounter} de {MaxAllowedMisses}");
@@ -381,7 +364,6 @@ namespace mil.Core
             _spawnedNotesInCurrentLoop.Clear();
             _nextNoteIndexToSpawn = 0;
 
-            // RESET DE SEGURANÇA HISTÓRICO:
             _isGameplayStarted = false;
             _hasTriggeredHudAppearance = false;
             _hasTriggeredPreparation = false;
@@ -389,7 +371,6 @@ namespace mil.Core
 
             Array.Clear(_isTrackHoldingActive, 0, _isTrackHoldingActive.Length);
 
-            // Força a HUD e as Splines a sumirem no escuro do reset, esperando os novos 2 compassos
             OnTrackVisibilityChanged?.Invoke(false);
         }
 
